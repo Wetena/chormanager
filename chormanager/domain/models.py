@@ -37,6 +37,37 @@ class Singer:
     updated_at: str = ""
     address: Optional[str] = None  # Legacy: Kombination aus street + city
 
+    def to_formation_singer(self):
+        """Convert to a ChorAufstellung Singer (lightweight formation model).
+
+        Returns:
+            chormanager.choraufstellung.singer_model.Singer: Formation singer.
+        """
+        from chormanager.choraufstellung.singer_model import (
+            Singer as FormationSinger,
+            VoiceGroup as FormationVoiceGroup,
+        )
+
+        vg_str = self.voice_group or "Sopran"
+        vg = FormationVoiceGroup.SOPRAN_1
+        for member in FormationVoiceGroup:
+            if member.value == vg_str:
+                vg = member
+                break
+
+        name = self.short_name or self.full_name
+        singer_id = self.id or ""
+        height = self.height or 0
+        affinity = self.affinity_uuid or ""
+
+        return FormationSinger(
+            name=name,
+            voice_group=vg,
+            height=height,
+            singer_id=singer_id,
+            affinity=affinity,
+        )
+
     def is_adult(self) -> bool:
         """Check if singer is 18 years or older."""
         if self._is_adult is not None:
