@@ -133,10 +133,10 @@ class FormationStorage:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
-            latest_link = backup_dir / "latest_autosave.json"
-            if latest_link.exists():
-                latest_link.unlink()
-            latest_link.symlink_to(filename)
+            # Update index file instead of symlink
+            index_path = backup_dir / "latest_autosave.json"
+            with open(index_path, 'w', encoding='utf-8') as f:
+                json.dump({"filename": filename}, f)
             
             self._rotate_backups(backup_dir, max_keep)
             
@@ -168,14 +168,17 @@ class FormationStorage:
         """Gibt Pfad zum neuesten Auto-Save zurück."""
         try:
             backup_dir = self._get_backup_dir()
-            latest_link = backup_dir / "latest_autosave.json"
-            if latest_link.exists():
-                target = os.readlink(latest_link)
-                full_path = backup_dir / target
-                if full_path.exists():
-                    return str(full_path)
+            index_path = backup_dir / "latest_autosave.json"
+            if index_path.exists():
+                with open(index_path, 'r', encoding='utf-8') as f:
+                    index = json.load(f)
+                filename = index.get("filename")
+                if filename:
+                    full_path = backup_dir / filename
+                    if full_path.exists():
+                        return str(full_path)
             return None
-        except OSError:
+        except (OSError, json.JSONDecodeError):
             return None
 
     def get_latest_autosave_mtime(self) -> Optional[float]:
@@ -189,14 +192,17 @@ class FormationStorage:
         """Löscht den neuesten Auto-Save."""
         try:
             backup_dir = self._get_backup_dir()
-            latest_link = backup_dir / "latest_autosave.json"
-            if latest_link.exists():
-                target = os.readlink(latest_link)
-                full_path = backup_dir / target
-                if full_path.exists():
-                    full_path.unlink()
-                latest_link.unlink()
+            index_path = backup_dir / "latest_autosave.json"
+            if index_path.exists():
+                with open(index_path, 'r', encoding='utf-8') as f:
+                    index = json.load(f)
+                filename = index.get("filename")
+                if filename:
+                    full_path = backup_dir / filename
+                    if full_path.exists():
+                        full_path.unlink()
+                index_path.unlink()
             return True
-        except OSError as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Error deleting latest autosave: {e}")
             return False
