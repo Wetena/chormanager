@@ -34,6 +34,7 @@ try:
     from core.grid_engine import GridEngine, GridConfig
     from ui.optimizer_dialog import OptimizerDialog
     from ui.dialogs import AddSingerDialog, AffinityDialog, VoicingConfigDialog
+    from ui.theme_manager import apply_theme, build_legend
 except ImportError:
     from enum import Enum
     class VoiceGroup(Enum):
@@ -976,7 +977,7 @@ class MainWindow(QMainWindow):
         
         settings = load_settings()
         current_theme = settings.get("theme", "light")
-        self._apply_theme(current_theme)
+        apply_theme(self, current_theme)
         
         if current_theme == "dark":
             self.actionDark.setChecked(True)
@@ -1023,7 +1024,7 @@ class MainWindow(QMainWindow):
         raster_layout.addStretch()
         rl.addLayout(raster_layout)
         sr=QHBoxLayout(); sr.addWidget(QLabel("Suche:")); self.search_input=QLineEdit(); self.search_input.setPlaceholderText("Sänger-Name..."); self.search_input.returnPressed.connect(self.do_quick_search); sr.addWidget(self.search_input); sb=QPushButton("🔍"); sb.setFixedWidth(30); sb.clicked.connect(self.do_quick_search); sr.addWidget(sb); rl.addLayout(sr)
-        self.leg=QWidget(); self.llay=QHBoxLayout(self.leg); rl.addWidget(self.leg); self.upd_leg()
+        self.leg=QWidget(); self.llay=QHBoxLayout(self.leg); rl.addWidget(self.leg); build_legend(self.cfg, self.llay)
         sp.addWidget(rp); sp.setSizes([250,800]); ml.addWidget(sp); self.menu()
         self.pool.placed_singer_ids = set()
         self.pool.singers = self.singers
@@ -1097,13 +1098,13 @@ class MainWindow(QMainWindow):
         
         self.actionLight = QAction("Light", self)
         self.actionLight.setCheckable(True)
-        self.actionLight.triggered.connect(lambda: self._apply_theme("light"))
+        self.actionLight.triggered.connect(lambda: apply_theme(self, "light"))
         v.addAction(self.actionLight)
         self.theme_group.addAction(self.actionLight)
         
         self.actionDark = QAction("Dark", self)
         self.actionDark.setCheckable(True)
-        self.actionDark.triggered.connect(lambda: self._apply_theme("dark"))
+        self.actionDark.triggered.connect(lambda: apply_theme(self, "dark"))
         v.addAction(self.actionDark)
         self.theme_group.addAction(self.actionDark)
         
@@ -1550,53 +1551,6 @@ class MainWindow(QMainWindow):
         if d.exec() == QDialog.DialogCode.Accepted:
             pass
 
-    def _apply_theme(self, theme):
-        qss_path = os.path.join(os.path.dirname(__file__), "..", "ui", "themes", f"{theme}.qss")
-        qss_path = os.path.normpath(qss_path)
-
-        if os.path.exists(qss_path):
-            with open(qss_path, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
-        else:
-            if theme == "dark":
-                self.setStyleSheet("""
-                    QMainWindow, QWidget { background: #2b2b2b; color: #F0F0F0; }
-                    QLabel { color: #F0F0F0; }
-                    QTableWidget { background: #3b3b3b; color: #F0F0F0; gridline-color: #555; }
-                    QTableWidget::item:selected { background: #4a4a4a; color: #fff; }
-                    QHeaderView::section { background: #3b3b3b; color: #F0F0F0; border: 1px solid #555; }
-                    QLineEdit, QComboBox { background: #3b3b3b; color: #F0F0F0; border: 1px solid #555; }
-                    QPushButton { background: #4a4a4a; color: #F0F0F0; border: 1px solid #555; padding: 4px; }
-                    QPushButton:hover { background: #5a5a5a; }
-                    QMenuBar { background: #3b3b3b; color: #F0F0F0; }
-                    QMenuBar::item:selected { background: #4a4a4a; }
-                    QMenu { background: #3b3b3b; color: #F0F0F0; border: 1px solid #555; }
-                    QMenu::item:selected { background: #4a4a4a; }
-                    QRadioButton { color: #F0F0F0; }
-                    QCheckBox { color: #F0F0F0; }
-                """)
-            else:
-                self.setStyleSheet("""
-                    QMainWindow, QWidget { background: #f8f4eb; color: #1A1A1A; }
-                    QLabel { color: #1A1A1A; }
-                    QTableWidget { background: #ffffff; color: #1A1A1A; gridline-color: #d4c9b8; }
-                    QTableWidget::item:selected { background: #d4c9b8; color: #1A1A1A; }
-                    QHeaderView::section { background: #f0ebe0; color: #1A1A1A; border: 1px solid #d4c9b8; }
-                    QLineEdit, QComboBox { background: #ffffff; color: #1A1A1A; border: 1px solid #d4c9b8; }
-                    QPushButton { background: #e8e0d4; color: #1A1A1A; border: 1px solid #d4c9b8; padding: 4px; }
-                    QPushButton:hover { background: #d4c9b8; }
-                    QMenuBar { background: #f0ebe0; color: #1A1A1A; }
-                    QMenuBar::item:selected { background: #d4c9b8; }
-                    QMenu { background: #f0ebe0; color: #1A1A1A; border: 1px solid #d4c9b8; }
-                    QMenu::item:selected { background: #d4c9b8; }
-                    QRadioButton { color: #1A1A1A; }
-                    QCheckBox { color: #1A1A1A; }
-                """)
-
-        clear_color_cache()
-        self.grid.refresh_grid()
-        self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
-
     def add_singer_via_menu(self):
         s = self.pool.add_dialog()
         if s:
@@ -1628,23 +1582,6 @@ class MainWindow(QMainWindow):
             if name in s.name.lower():
                 self.grid.highlight_singer(s, self)
                 return
-
-    def upd_leg(self):
-        while self.llay.count():
-            w = self.llay.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        for vg in self.cfg:
-            if isinstance(vg, dict):
-                vg_id = vg.get("id", "")
-                vg_color = vg.get("color", "#cccccc")
-            else:
-                vg_id = vg
-                vg_color = get_voice_group_color(vg)
-            l = QLabel(vg_id)
-            l.setStyleSheet(f"background: {vg_color}; padding: 4px; color: #000;")
-            self.llay.addWidget(l)
-        self.llay.addStretch()
 
     def show_about(self):
         QMessageBox.about(self, "Über Choraufstellung", "Choraufstellung 1.0\n\nVerwaltung von Choraufstellungen.")
