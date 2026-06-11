@@ -24,7 +24,7 @@ class FormationLoader:
 
         if event_data_file and os.path.exists(event_data_file):
             result = load_singers_from_event_data_file(event_data_file)
-            if result and result["singers"]:
+            if result:
                 mw._loaded_metadata = result["metadata"]
                 mw.singers = result["singers"]
                 mw.pool.singers = mw.singers

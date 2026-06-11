@@ -6,8 +6,9 @@ Extracted from main.py for separation of concerns.
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QWidget,
+    QCompleter,
 )
-from PyQt6.QtCore import Qt, QCompleter
+from PyQt6.QtCore import Qt
 
 
 def _import_singer():

@@ -3,7 +3,7 @@
 Extracts the ~80-line menu() method from main.py into a standalone function.
 """
 
-from PyQt6.QtWidgets import QAction, QActionGroup
+from PyQt6.QtGui import QAction, QActionGroup
 
 
 def _import_theme():
