@@ -210,73 +210,10 @@ class SingerTile(QFrame):
         else:
             super().mouseMoveEvent(e)
 
-class MoveSingerCommand(QUndoCommand):
-    def __init__(self, singer, old_row, old_col, new_row, new_col, grid):
-        super().__init__()
-        self.singer = singer
-        self.old_row = old_row
-        self.old_col = old_col
-        self.new_row = new_row
-        self.new_col = new_col
-        self.grid = grid
-        self.setText("Sänger verschoben")
-    
-    def redo(self):
-        self.singer.row = self.new_row
-        self.singer.col = self.new_col
-        self.grid.refresh_grid()
-    
-    def undo(self):
-        self.singer.row = self.old_row
-        self.singer.col = self.old_col
-        self.grid.refresh_grid()
+from core.commands import QtMoveSingerCommand as MoveSingerCommand
+from core.commands import QtSwapSingersCommand as SwapSingersCommand
+from core.commands import QtMoveGroupCommand as MoveGroupCommand
 
-class SwapSingersCommand(QUndoCommand):
-    def __init__(self, singer1, singer2, grid):
-        super().__init__("Positionen getauscht")
-        self.singer1 = singer1
-        self.singer2 = singer2
-        self.grid = grid
-        self.old_row1, self.old_col1 = singer1.row, singer1.col
-        self.old_row2, self.old_col2 = singer2.row, singer2.col
-    
-    def redo(self):
-        self.singer1.row, self.singer2.row = self.old_row2, self.old_row1
-        self.singer1.col, self.singer2.col = self.old_col2, self.old_col1
-        self.grid.refresh_grid()
-    
-    def undo(self):
-        self.singer1.row, self.singer2.row = self.old_row1, self.old_row2
-        self.singer1.col, self.singer2.col = self.old_col1, self.old_col2
-        self.grid.refresh_grid()
-
-class MoveGroupCommand(QUndoCommand):
-    def __init__(self, selected_ids, dx, dy, grid):
-        super().__init__("Gruppe verschoben")
-        self.selected_ids = selected_ids
-        self.dx = dx
-        self.dy = dy
-        self.grid = grid
-        self.old_positions = {}
-        for sid in selected_ids:
-            singer = next((s for s in grid.singers if s.singer_id == sid), None)
-            if singer:
-                self.old_positions[sid] = (singer.row, singer.col)
-
-    def redo(self):
-        for sid in self.selected_ids:
-            singer = next((s for s in self.grid.singers if s.singer_id == sid), None)
-            if singer:
-                singer.row += self.dy
-                singer.col += self.dx
-        self.grid.refresh_grid()
-
-    def undo(self):
-        for sid in self.selected_ids:
-            singer = next((s for s in self.grid.singers if s.singer_id == sid), None)
-            if singer and sid in self.old_positions:
-                singer.row, singer.col = self.old_positions[sid]
-        self.grid.refresh_grid()
 
 class FormationGrid(QWidget):
     singer_removed_from_grid = pyqtSignal(object)
