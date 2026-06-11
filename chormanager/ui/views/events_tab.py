@@ -1,8 +1,9 @@
 """Events tab view for ChorManager."""
 
-from PyQt6.QtCore import Qt, pyqtSignal
 from datetime import datetime
 
+from PyQt6.QtCore import Qt, QDate, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -15,8 +16,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QHeaderView,
 )
-from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtGui import QAction
 
 from ...data.database import Database
 from ...domain.repository import (

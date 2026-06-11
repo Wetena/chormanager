@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QDialogButtonBox,
-    QLineEdit as QLineEditW,
     QTextEdit,
     QComboBox,
 )
