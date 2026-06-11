@@ -36,6 +36,7 @@ try:
     from ui.dialogs import AddSingerDialog, AffinityDialog, VoicingConfigDialog
     from ui.theme_manager import apply_theme, build_legend
     from ui.menu_builder import build_menu
+    from services.formation_file_service import FormationFileService
 except ImportError:
     from enum import Enum
     class VoiceGroup(Enum):
@@ -956,6 +957,7 @@ class MainWindow(QMainWindow):
         
         self.is_modified = False
         self.last_manual_save_mtime = 0
+        self.file_service = FormationFileService(self)
         self._loaded_metadata = {
             "project": project_name or "",
             "event": event_name or "",
@@ -963,7 +965,7 @@ class MainWindow(QMainWindow):
             "event_type": event_type or ""
         }
         self.autosave_timer = QTimer(self)
-        self.autosave_timer.timeout.connect(self._autosave_check)
+        self.autosave_timer.timeout.connect(self.file_service.autosave_check)
         self.autosave_timer.start(120000)
 
         self.threadpool = QThreadPool(self)
@@ -974,7 +976,7 @@ class MainWindow(QMainWindow):
         if self.chormanager_mode:
             self._load_from_chormanager()
         else:
-            self._check_recovery()
+            self.file_service.check_recovery()
         
         settings = load_settings()
         current_theme = settings.get("theme", "light")
@@ -1188,283 +1190,6 @@ class MainWindow(QMainWindow):
             self.is_modified = True
         else:
             QMessageBox.information(self, "Nähe", "Alle Singpartner sind bereits nebeneinander oder nicht in der gleichen Reihe.")
-
-    def new_f(self):
-        if self.is_modified:
-            r = QMessageBox.question(self, "Ungespeichert", "Änderungen speichern?", QMessageBox.StandardButton.Save|QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
-            if r == QMessageBox.StandardButton.Save:
-                self.save_f()
-            elif r == QMessageBox.StandardButton.Cancel:
-                return
-        self.grid.singers = []
-        self.grid.refresh_grid()
-        self.singers = []
-        self.file = None
-        self.is_modified = False
-        self.update_grid_count()
-
-    def open_f(self):
-        fp, _ = QFileDialog.getOpenFileName(self, "Öffnen", "", "JSON (*.json);;Alle (*)")
-        if not fp:
-            return
-        self._open_file(fp)
-
-    def _open_file(self, fp):
-        data = self.storage.load_formation(fp)
-        if not data:
-            return
-        self.singers = data.get("singers", [])
-        for s in self.singers:
-            if not hasattr(s, 'affinity'):
-                s.affinity = ""
-        self.grid.singers = [s for s in self.singers if s.row >= 0]
-        self.grid.refresh_grid()
-        self.pool.singers = self.singers
-        self.pool.placed_singer_ids = self.grid.get_placed_singer_ids()
-        self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
-        self.file = fp
-        self.is_modified = False
-        self.update_grid_count()
-        self._loaded_metadata = data.get("metadata", {})
-
-    def save_f(self):
-        grid_cells = self.grid.rows * self.grid.cols
-        placed = len(self.grid.singers)
-        if placed > grid_cells:
-            excess = placed - grid_cells
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Zu viele Sänger")
-            msg_box.setText(f"Die Aufstellung hat {placed} Sänger im Raster, aber nur {grid_cells} Plätze.")
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            
-            btn_resize = QPushButton("Raster vergrößern")
-            btn_pool = QPushButton("In Pool zurücksetzen")
-            msg_box.addButton(btn_resize, QMessageBox.ButtonRole.ActionRole)
-            msg_box.addButton(btn_pool, QMessageBox.ButtonRole.ActionRole)
-            
-            reply = msg_box.exec()
-            if reply == btn_pool:
-                self._reset_excess_to_pool(excess)
-                return self._save_file(self.file, metadata=self._loaded_metadata)
-            return False
-        
-        if not self.file:
-            return self.save_as_f()
-        
-        return self._save_file(self.file, metadata=self._loaded_metadata)
-
-    def save_as_f(self):
-        from config import get_data_dir
-        data_dir = get_data_dir()
-        auto_name = self.generate_filename(
-            self._loaded_metadata.get("event_date", ""),
-            self._loaded_metadata.get("event", "")
-        )
-        fp, _ = QFileDialog.getSaveFileName(self, "Speichern", os.path.join(data_dir, auto_name), "JSON (*.json)")
-        if not fp:
-            return False
-        if not fp.endswith(".json"):
-            fp += ".json"
-        
-        grid_cells = self.grid.rows * self.grid.cols
-        placed = len(self.grid.singers)
-        if placed > grid_cells:
-            excess = placed - grid_cells
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Zu viele Sänger")
-            msg_box.setText(f"Die Aufstellung hat {placed} Sänger im Raster, aber nur {grid_cells} Plätze.")
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            
-            btn_resize = QPushButton("Raster vergrößern")
-            btn_pool = QPushButton("In Pool zurücksetzen")
-            msg_box.addButton(btn_resize, QMessageBox.ButtonRole.ActionRole)
-            msg_box.addButton(btn_pool, QMessageBox.ButtonRole.ActionRole)
-            
-            reply = msg_box.exec()
-            if reply == btn_pool:
-                self._reset_excess_to_pool(excess)
-            else:
-                return False
-        
-        return self._save_file(fp, metadata=self._loaded_metadata)
-
-    def _save_file(self, fp, metadata: dict = None):
-        placed = self.grid.get_placed_singers()
-        singers = self.singers
-        rows = self.grid.rows
-        cols = self.grid.cols
-        staggered = self.grid.staggered
-        
-        if self.storage.save_formation(singers, rows, cols, fp, placed, staggered, metadata=metadata):
-            self.file = fp
-            self.is_modified = False
-            import time
-            self.last_manual_save_mtime = time.time()
-            return True
-        return False
-    
-    def generate_filename(self, event_date: str, event_name: str = None) -> str:
-        """Generate auto filename: choraufstellung-DATE-version-DATE.json"""
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        name_part = event_name.replace(" ", "-") if event_name else "event"
-        if event_date:
-            try:
-                date_part = datetime.fromisoformat(event_date).strftime("%Y-%m-%d")
-            except (ValueError, TypeError):
-                date_part = event_date[:10] if len(event_date) >= 10 else today
-        else:
-            date_part = today
-        return f"choraufstellung-{date_part}-version-{today}.json"
-
-    def _autosave_check(self):
-        if not self.is_modified:
-            return
-        if not self.file:
-            return
-        placed = self.grid.get_placed_singer_ids()
-        data = {
-            "version": "1.0",
-            "rows": self.grid.rows,
-            "cols": self.grid.cols,
-            "staggered": self.grid.staggered,
-            "singers": [
-                {"name": s.name, "voice_group": s.voice_group.value if hasattr(s.voice_group, 'value') else str(s.voice_group),
-                 "height": s.height, "singer_id": s.singer_id, "row": s.row, "col": s.col, "affinity": s.affinity}
-                for s in self.singers
-            ],
-            "placed": list(placed)
-        }
-        from workers import AutosaveWorker
-        worker = AutosaveWorker(self.storage, data)
-        worker.signals.error.connect(lambda msg: print(f"Autosave error: {msg}"))
-        self.threadpool.start(worker)
-
-    def _check_recovery(self):
-        """Check for autosave and offer recovery if newer than last manual save."""
-        latest = self.storage.get_latest_autosave_path()
-        if not latest:
-            return
-        if self.storage.get_latest_autosave_mtime() <= self.last_manual_save_mtime:
-            return
-        
-        r = QMessageBox.question(self, "Wiederherstellen", 
-                           "Es wurde eine automatisch gespeicherte Aufstellung gefunden, die neuer ist als Ihre letzte manuelle Speicherung.\n\n"
-                           "Möchten Sie die automatisch gespeicherte Version wiederherstellen?\n"
-                           "(Ihre manuell gespeicherte Version bleibt erhalten.)",
-                           QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
-        if r != QMessageBox.StandardButton.Yes:
-            return
-        
-        data = self.storage.load_formation(latest)
-        if data:
-            self._load_formation_data(data)
-            self.file = latest
-            self.is_modified = True
-
-    def export_pdf(self):
-        from pdf_export_dialog import PDFExportDialog
-        from config import get_data_dir
-        from workers import PDFExportWorker
-
-        event_date = os.environ.get("CHOR_EVENT_DATE", "") or self.event_date or ""
-        event_name = os.environ.get("CHOR_EVENT_NAME", "") or self.event_name or ""
-        project_name = os.environ.get("CHOR_PROJECT", "") or self.project_name or ""
-
-        if event_date:
-            try:
-                from datetime import datetime
-                event_date = datetime.fromisoformat(event_date).strftime("%Y-%m-%d")
-            except (ValueError, TypeError):
-                event_date = event_date[:10] if len(event_date) >= 10 else ""
-
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        date_part = event_date if event_date else today
-        default_filename = f"choraufstellung-{date_part}-version-{today}.pdf"
-
-        event_info = ""
-        if event_name:
-            event_info = event_name
-        if event_date:
-            event_info += f" ({event_date})"
-        if project_name:
-            event_info = f"{project_name}: {event_info}" if event_info else project_name
-
-        data_dir = get_data_dir()
-        workdir = os.path.join(os.path.dirname(data_dir), "workdir")
-        os.makedirs(workdir, exist_ok=True)
-
-        dlg = PDFExportDialog(self, default_filename=default_filename, event_info=event_info)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        settings = dlg.get_settings()
-
-        fp = os.path.join(workdir, settings["filename"])
-        if not fp.endswith(".pdf"):
-            fp += ".pdf"
-
-        title = "Choraufstellung"
-        subtitle = ""
-        if event_name:
-            subtitle = event_name
-        if event_date:
-            subtitle += f" - {event_date}"
-        if project_name:
-            subtitle = f"{project_name}: {subtitle}" if subtitle else project_name
-
-        self.statusBar().showMessage("PDF wird exportiert...")
-
-        worker = PDFExportWorker(
-            self.pdf, self.singers, self.grid.rows, self.grid.cols, fp,
-            title=title, subtitle=subtitle, staggered=self.grid.staggered,
-            orientation=settings["orientation"], color_mode=settings["color_mode"],
-            text_rotation=settings["text_rotation"]
-        )
-        worker.signals.finished.connect(self._on_pdf_export_done)
-        worker.signals.error.connect(self._on_pdf_export_error)
-        self.threadpool.start(worker)
-
-    def _on_pdf_export_done(self, success, message):
-        if success:
-            self.statusBar().showMessage("")
-            QMessageBox.information(self, "PDF Export", f"PDF exportiert nach:\n{message}")
-            from PyQt6.QtGui import QDesktopServices
-            from PyQt6.QtCore import QUrl
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(message)))
-        else:
-            self.statusBar().showMessage("")
-            QMessageBox.warning(self, "Fehler", message)
-
-    def _on_pdf_export_error(self, error_msg):
-        self.statusBar().showMessage("")
-        QMessageBox.critical(self, "Fehler", f"PDF-Export fehlgeschlagen:\n{error_msg}")
-
-    def run_optimizer(self):
-        from workers import OptimizerWorker
-        d = OptimizerDialog(self)
-        if d.exec() == QDialog.DialogCode.Accepted:
-            rules = d.get_selected_rules()
-            if rules:
-                primary = d.get_primary_rule()
-                refinement = d.get_refinement_rules()
-                self.statusBar().showMessage("Optimierung läuft...")
-                worker = OptimizerWorker(self.grid, primary, refinement)
-                worker.signals.finished.connect(self._on_optimizer_done)
-                worker.signals.error.connect(self._on_optimizer_error)
-                self.threadpool.start(worker)
-
-    def _on_optimizer_done(self, success, message):
-        self.statusBar().showMessage("")
-        if success:
-            QMessageBox.information(self, "Optimierung", message)
-        else:
-            QMessageBox.warning(self, "Optimierung", message)
-
-    def _on_optimizer_error(self, error_msg):
-        self.statusBar().showMessage("")
-        QMessageBox.critical(self, "Fehler", f"Optimierung fehlgeschlagen:\n{error_msg}")
 
     def show_cfg(self):
         d = VoicingConfigDialog(self)

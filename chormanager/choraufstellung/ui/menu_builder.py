@@ -26,12 +26,12 @@ def build_menu(main_window):
 
     # Datei
     f = m.addMenu("Datei")
-    f.addAction(QAction("Neu", main_window, shortcut="Ctrl+N", triggered=main_window.new_f))
-    f.addAction(QAction("Öffnen...", main_window, shortcut="Ctrl+O", triggered=main_window.open_f))
-    f.addAction(QAction("Speichern", main_window, shortcut="Ctrl+S", triggered=main_window.save_f))
-    f.addAction(QAction("Speichern unter...", main_window, shortcut="Ctrl+Shift+S", triggered=main_window.save_as_f))
+    f.addAction(QAction("Neu", main_window, shortcut="Ctrl+N", triggered=main_window.file_service.new_file))
+    f.addAction(QAction("Öffnen...", main_window, shortcut="Ctrl+O", triggered=main_window.file_service.open_file))
+    f.addAction(QAction("Speichern", main_window, shortcut="Ctrl+S", triggered=main_window.file_service.save_file))
+    f.addAction(QAction("Speichern unter...", main_window, shortcut="Ctrl+Shift+S", triggered=main_window.file_service.save_as_file))
     f.addSeparator()
-    f.addAction(QAction("PDF Export...", main_window, shortcut="Ctrl+E", triggered=main_window.export_pdf))
+    f.addAction(QAction("PDF Export...", main_window, shortcut="Ctrl+E", triggered=main_window.file_service.export_pdf))
     f.addSeparator()
     f.addAction(QAction("Beenden", main_window, shortcut="Ctrl+Q", triggered=main_window.close))
 
@@ -81,7 +81,7 @@ def build_menu(main_window):
     a.addAction(reset_action)
     a.addSeparator()
     opt_action = QAction("Optimiert aufstellen...", main_window)
-    opt_action.triggered.connect(main_window.run_optimizer)
+    opt_action.triggered.connect(main_window.file_service.run_optimizer)
     a.addAction(opt_action)
 
     # Konfigurieren
