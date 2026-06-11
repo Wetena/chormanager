@@ -483,178 +483,43 @@ class FormationGrid(QWidget):
     # --- Auto-arrange methods ---
     
     def auto_arrange_by_height(self):
+        from core.arrangement import arrange_by_height, apply_placements
         if not self.singers:
             return
-        sorted_singers = sorted(
-            self.singers,
-            key=lambda s: (-s.height, (s.voice_group.value if hasattr(s.voice_group, 'value') else str(s.voice_group)), s.name)
-        )
-        placed_ids = set()
-        idx = 0
-        for r in range(self.rows):
-            for c in range(self.cols):
-                if idx < len(sorted_singers):
-                    s = sorted_singers[idx]
-                    s.row = r
-                    s.col = c
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
+        placements = arrange_by_height(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
         self.refresh_grid()
     
     def auto_arrange_men_outer(self):
+        from core.arrangement import arrange_men_outer, apply_placements
         if not self.singers:
             return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        basses = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
-        tenors = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
-        others = [s for s in self.singers if s not in basses and s not in tenors]
-        basses.sort(key=lambda s: (get_vg(s.voice_group), s.name))
-        tenors.sort(key=lambda s: (get_vg(s.voice_group), s.name))
-        others.sort(key=lambda s: (get_vg(s.voice_group), s.name))
-        placed_ids = set()
-        idx = 0
-        for s in basses[:len(basses)//2]:
-            s.row = idx % self.rows
-            s.col = 0
-            placed_ids.add(s.singer_id)
-            idx += 1
-        for s in tenors[:len(tenors)//2]:
-            s.row = idx % self.rows
-            s.col = 1
-            placed_ids.add(s.singer_id)
-            idx += 1
-        for s in basses[len(basses)//2:]:
-            s.row = idx % self.rows
-            s.col = self.cols - 1
-            placed_ids.add(s.singer_id)
-            idx += 1
-        for s in tenors[len(tenors)//2:]:
-            s.row = idx % self.rows
-            s.col = self.cols - 2
-            placed_ids.add(s.singer_id)
-            idx += 1
-        mid_col_start = 2
-        mid_col_end = self.cols - 3
-        for s in others:
-            s.row = idx % self.rows
-            s.col = mid_col_start + (idx % (mid_col_end - mid_col_start + 1))
-            placed_ids.add(s.singer_id)
-            idx += 1
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
+        placements = arrange_men_outer(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
         self.refresh_grid()
     
     def auto_arrange_satb(self):
+        from core.arrangement import arrange_satb, apply_placements
         if not self.singers:
             return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
-        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
-        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
-        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
-        sopran.sort(key=lambda s: s.name)
-        alt.sort(key=lambda s: s.name)
-        tenor.sort(key=lambda s: s.name)
-        bass.sort(key=lambda s: s.name)
-        ordered = sopran + alt + tenor + bass
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
+        placements = arrange_satb(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
         self.refresh_grid()
     
     def auto_arrange_sbta(self):
+        from core.arrangement import arrange_sbta, apply_placements
         if not self.singers:
             return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
-        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
-        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
-        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
-        sopran.sort(key=lambda s: s.name)
-        alt.sort(key=lambda s: s.name)
-        tenor.sort(key=lambda s: s.name)
-        bass.sort(key=lambda s: s.name)
-        ordered = sopran + bass + tenor + alt
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
+        placements = arrange_sbta(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
         self.refresh_grid()
     
     def auto_arrange_s1s2b2b1t2t1a2a1(self):
+        from core.arrangement import arrange_s1s2b2b1t2t1a2a1, apply_placements
         if not self.singers:
             return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        s1 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 1"]
-        s2 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 2"]
-        b2 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 2"]
-        b1 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 1"]
-        t2 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 2"]
-        t1 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 1"]
-        a2 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 2"]
-        a1 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 1"]
-        s1.sort(key=lambda s: s.name)
-        s2.sort(key=lambda s: s.name)
-        b2.sort(key=lambda s: s.name)
-        b1.sort(key=lambda s: s.name)
-        t2.sort(key=lambda s: s.name)
-        t1.sort(key=lambda s: s.name)
-        a2.sort(key=lambda s: s.name)
-        a1.sort(key=lambda s: s.name)
-        ordered = s1 + s2 + b2 + b1 + t2 + t1 + a2 + a1
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
+        placements = arrange_s1s2b2b1t2t1a2a1(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
         self.refresh_grid()
     
     def optimize(self, primary_rule=None, refinement_rules=None):
