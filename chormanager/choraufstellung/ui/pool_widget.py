@@ -231,7 +231,7 @@ class SingerPool(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.setDragDropMode(QTableWidget.DragDropMode.DragOnly)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.itemDoubleClicked.connect(self.on_double_click)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
@@ -444,19 +444,22 @@ class SingerPool(QWidget):
 class DraggableTableWidget(QTableWidget):
     """Table widget with drag support for singers."""
     
-    def startDrag(self, supportedActions):
-        row = self.currentRow()
-        if row >= 0:
-            from PyQt6.QtCore import QMimeData
-            from PyQt6.QtCore import Qt
-            
-            item = self.item(row, 0)
+    def startDrag(self, actions):
+        selected = self.selectedItems()
+        if not selected:
+            return
+        singer_ids = []
+        for item in selected:
             singer = item.data(Qt.ItemDataRole.UserRole)
-            if singer:
-                drag = QDrag(self)
-                mime = QMimeData()
-                mime.setText(f"singer:{singer.singer_id}")
-                drag.setMimeData(mime)
-                drag.exec(Qt.DragAction.Copy)
+            if singer and singer.singer_id not in singer_ids:
+                singer_ids.append(singer.singer_id)
+        if not singer_ids:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        if len(singer_ids) == 1:
+            mime.setText(f"singer:{singer_ids[0]}")
         else:
-            super().startDrag(supportedActions)
+            mime.setText(f"singer:{singer_ids[0]}:group:{','.join(singer_ids)}")
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
