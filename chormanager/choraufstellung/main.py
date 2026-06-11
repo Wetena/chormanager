@@ -1508,7 +1508,13 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
         name_part = event_name.replace(" ", "-") if event_name else "event"
-        date_part = event_date[:10] if event_date else today
+        if event_date:
+            try:
+                date_part = datetime.fromisoformat(event_date).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                date_part = event_date[:10] if len(event_date) >= 10 else today
+        else:
+            date_part = today
         return f"choraufstellung-{date_part}-version-{today}.json"
 
     def _autosave_check(self):
@@ -1566,7 +1572,11 @@ class MainWindow(QMainWindow):
         project_name = os.environ.get("CHOR_PROJECT", "") or self.project_name or ""
 
         if event_date:
-            event_date = event_date[:10]
+            try:
+                from datetime import datetime
+                event_date = datetime.fromisoformat(event_date).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                event_date = event_date[:10] if len(event_date) >= 10 else ""
 
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
