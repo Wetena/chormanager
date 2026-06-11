@@ -37,6 +37,8 @@ class SingerRepository:
         "height",
     ]
 
+    _VALID_COLS = set(_SINGER_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         """Initialize repository."""
         self.db = db
@@ -44,6 +46,12 @@ class SingerRepository:
     def _cols(self, table_columns: List[str]) -> str:
         cols = [c for c in table_columns if c != "is_adult"]
         return ", ".join(cols)
+
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Singer: {invalid}. Valid fields: {self._VALID_COLS}")
 
     def create(self, **kwargs) -> Singer:
         """Create a new singer.
@@ -54,6 +62,7 @@ class SingerRepository:
         Returns:
             Singer: Created singer.
         """
+        self._validate_kwargs(kwargs)
         singer_id = self.db.generate_id()
         now = datetime.now().isoformat()
 
@@ -119,6 +128,7 @@ class SingerRepository:
         Returns:
             Singer or None if not found.
         """
+        self._validate_kwargs(kwargs)
         kwargs["updated_at"] = datetime.now().isoformat()
 
         set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
@@ -196,6 +206,13 @@ class SingerRepository:
 class EventRepository:
     """Repository for Event operations."""
 
+    _EVENT_COLS = [
+        "id", "name", "date", "event_type", "location", "description",
+        "project_id", "created_at", "updated_at"
+    ]
+
+    _VALID_COLS = set(_EVENT_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         """Initialize repository.
 
@@ -203,6 +220,12 @@ class EventRepository:
             db: Database instance.
         """
         self.db = db
+
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Event: {invalid}. Valid fields: {self._VALID_COLS}")
 
     def create(self, **kwargs) -> Event:
         """Create a new event.
@@ -213,6 +236,7 @@ class EventRepository:
         Returns:
             Event: Created event.
         """
+        self._validate_kwargs(kwargs)
         event_id = self.db.generate_id()
         now = datetime.now().isoformat()
 
@@ -258,6 +282,7 @@ class EventRepository:
 
     def update(self, event_id: str, **kwargs) -> Optional[Event]:
         """Update an event."""
+        self._validate_kwargs(kwargs)
         kwargs["updated_at"] = datetime.now().isoformat()
 
         set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
@@ -281,12 +306,26 @@ class EventRepository:
 class AvailabilityRepository:
     """Repository for Availability operations."""
 
+    _AVAILABILITY_COLS = [
+        "id", "singer_id", "event_id", "status",
+        "created_at", "updated_at"
+    ]
+
+    _VALID_COLS = set(_AVAILABILITY_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         """Initialize repository."""
         self.db = db
 
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Availability: {invalid}. Valid fields: {self._VALID_COLS}")
+
     def create(self, **kwargs) -> Availability:
         """Create availability entry."""
+        self._validate_kwargs(kwargs)
         avail_id = self.db.generate_id()
         now = datetime.now().isoformat()
 
@@ -364,12 +403,26 @@ class AvailabilityRepository:
 class ProjectRepository:
     """Repository for Project operations."""
 
+    _PROJECT_COLS = [
+        "id", "name", "description", "is_active",
+        "created_at", "updated_at"
+    ]
+
+    _VALID_COLS = set(_PROJECT_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         """Initialize repository."""
         self.db = db
 
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Project: {invalid}. Valid fields: {self._VALID_COLS}")
+
     def create(self, **kwargs) -> Project:
         """Create a new project."""
+        self._validate_kwargs(kwargs)
         project_id = self.db.generate_id()
         now = datetime.now().isoformat()
 
@@ -422,6 +475,7 @@ class ProjectRepository:
 
     def update(self, project_id: str, **kwargs) -> Optional[Project]:
         """Update a project."""
+        self._validate_kwargs(kwargs)
         kwargs["updated_at"] = datetime.now().isoformat()
 
         set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
@@ -454,9 +508,17 @@ class BesetzungRepository:
         "updated_at",
     ]
 
+    _VALID_COLS = set(_BESETZUNG_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         """Initialize repository."""
         self.db = db
+
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Besetzung: {invalid}. Valid fields: {self._VALID_COLS}")
 
     def _cols(self, table_columns: List[str]) -> str:
         return ", ".join(table_columns)
@@ -520,7 +582,7 @@ class BesetzungRepository:
     def update(self, besetzung_id: str, **kwargs) -> Optional[Besetzung]:
         """Update a besetzung."""
         import json
-
+        self._validate_kwargs(kwargs)
         kwargs["updated_at"] = datetime.now().isoformat()
 
         if "singer_ids" in kwargs and isinstance(kwargs["singer_ids"], list):
@@ -559,8 +621,16 @@ class RepertoireRepository:
         "updated_at",
     ]
 
+    _VALID_COLS = set(_REPERTOIRE_COLS) - {"id", "created_at", "updated_at"}
+
     def __init__(self, db: Database):
         self.db = db
+
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """Validate that all kwargs keys are valid column names."""
+        invalid = set(kwargs.keys()) - self._VALID_COLS
+        if invalid:
+            raise ValueError(f"Invalid fields for Repertoire: {invalid}. Valid fields: {self._VALID_COLS}")
 
     def _cols(self, table_columns: List[str]) -> str:
         return ", ".join(table_columns)
@@ -626,6 +696,7 @@ class RepertoireRepository:
         return [Repertoire(**dict(row)) for row in result.fetchall()]
 
     def update(self, repertoire_id: str, **kwargs) -> Optional[Repertoire]:
+        self._validate_kwargs(kwargs)
         kwargs["updated_at"] = datetime.now().isoformat()
 
         set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
