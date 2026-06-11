@@ -1,39 +1,26 @@
 import sys
 import os
-import json
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
-    QFileDialog, QDialog, QFormLayout, QLineEdit, QComboBox, QListWidget,
-    QListWidgetItem, QScrollArea, QMessageBox, QFrame, QCheckBox, QSplitter,
-    QGraphicsDropShadowEffect, QRubberBand,
-    QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QRadioButton
+    QLabel, QPushButton, QLineEdit, QComboBox,
+    QScrollArea, QMessageBox, QSplitter, QRadioButton
 )
-from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint, QThreadPool
-from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QUndoStack, QUndoCommand
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThreadPool
+from PyQt6.QtGui import QUndoStack
 
 try:
-    from config import load_settings, save_settings, load_voice_groups_config, get_valid_voice_groups, get_voice_group_color, get_data_dir, clear_color_cache
+    from config import load_settings, get_valid_voice_groups
 except ImportError:
     def load_settings(): return {"theme": "standard"}
-    def save_settings(s): return True
-    def load_voice_groups_config(): return []
     def get_valid_voice_groups(): return []
-    def get_voice_group_color(v): return "#cccccc"
-    def get_data_dir(): return "."
-    def clear_color_cache(): pass
 
 try:
     from singer_model import Singer, VoiceGroup, voice_group_color
     from storage import FormationStorage
     from pdf_export import PDFExporter
-    from core.optimizer import FormationOptimizer
     from core.grid_engine import GridEngine, GridConfig
-    from ui.optimizer_dialog import OptimizerDialog
-    from ui.dialogs import AddSingerDialog, AffinityDialog, VoicingConfigDialog
+    from ui.dialogs import VoicingConfigDialog
     from ui.theme_manager import apply_theme, build_legend
     from ui.menu_builder import build_menu
     from services.formation_file_service import FormationFileService
@@ -51,26 +38,12 @@ except ImportError:
         def save_formation(self, *a): return True
     class PDFExporter:
         def export_formation(self, *a): return True
-    class FormationOptimizer:
-        @staticmethod
-        def run(*a): return None
-    class OptimizerDialog(QDialog):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.setWindowTitle("Optimierung nicht verfügbar")
     class GridEngine:
         def __init__(self, *a): pass
+    class VoicingConfigDialog:
+        pass
 
-from ui.pool_widget import SingerPool, DraggableTableWidget
-
-
-from ui.grid_widget import FormationGrid, SingerTile
-
-from core.commands import QtMoveSingerCommand as MoveSingerCommand
-from core.commands import QtSwapSingersCommand as SwapSingersCommand
-from core.commands import QtMoveGroupCommand as MoveGroupCommand
-
-
+from ui.pool_widget import SingerPool
 from ui.grid_widget import FormationGrid, SingerTile
 
 
@@ -377,7 +350,7 @@ class MainWindow(QMainWindow):
         if self.is_modified:
             r = QMessageBox.question(self, "Ungespeichert", "Änderungen speichern?", QMessageBox.StandardButton.Save|QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
             if r == QMessageBox.StandardButton.Save:
-                self.save_f()
+                self.file_service.save_file()
                 e.accept()
             elif r == QMessageBox.StandardButton.Discard:
                 e.accept()
