@@ -227,6 +227,110 @@ def arrange_s1s2b2b1t2t1a2a1(
     return placements
 
 
+def arrange_s1s2a1a2t1t2b1b2(
+    singers: List[Any], rows: int, cols: int
+) -> List[Tuple[str, int, int]]:
+    """Place singers in S1-S2-A1-A2-T1-T2-B1-B2 order.
+
+    Args:
+        singers: List of Singer objects.
+        rows: Number of grid rows.
+        cols: Number of grid columns.
+
+    Returns:
+        List of (singer_id, row, col) placements.
+    """
+    if not singers:
+        return []
+
+    groups = {
+        "Sopran 1": [], "Sopran 2": [],
+        "Alt 1": [], "Alt 2": [],
+        "Tenor 1": [], "Tenor 2": [],
+        "Bass 1": [], "Bass 2": [],
+    }
+
+    for s in singers:
+        vg = _get_vg_str(s.voice_group)
+        if vg in groups:
+            groups[vg].append(s)
+
+    for vg_list in groups.values():
+        vg_list.sort(key=lambda s: s.name)
+
+    ordered = (
+        groups["Sopran 1"] + groups["Sopran 2"]
+        + groups["Alt 1"] + groups["Alt 2"]
+        + groups["Tenor 1"] + groups["Tenor 2"]
+        + groups["Bass 1"] + groups["Bass 2"]
+    )
+
+    placements = []
+    idx = 0
+
+    for col in range(cols):
+        for row in range(rows):
+            if idx < len(ordered):
+                placements.append((ordered[idx].singer_id, row, col))
+                idx += 1
+            else:
+                break
+
+    return placements
+
+
+def arrange_s1s2b1b2t1t2a1a2(
+    singers: List[Any], rows: int, cols: int
+) -> List[Tuple[str, int, int]]:
+    """Place singers in S1-S2-B1-B2-T1-T2-A1-A2 order.
+
+    Args:
+        singers: List of Singer objects.
+        rows: Number of grid rows.
+        cols: Number of grid columns.
+
+    Returns:
+        List of (singer_id, row, col) placements.
+    """
+    if not singers:
+        return []
+
+    groups = {
+        "Sopran 1": [], "Sopran 2": [],
+        "Bass 1": [], "Bass 2": [],
+        "Tenor 1": [], "Tenor 2": [],
+        "Alt 1": [], "Alt 2": [],
+    }
+
+    for s in singers:
+        vg = _get_vg_str(s.voice_group)
+        if vg in groups:
+            groups[vg].append(s)
+
+    for vg_list in groups.values():
+        vg_list.sort(key=lambda s: s.name)
+
+    ordered = (
+        groups["Sopran 1"] + groups["Sopran 2"]
+        + groups["Bass 1"] + groups["Bass 2"]
+        + groups["Tenor 1"] + groups["Tenor 2"]
+        + groups["Alt 1"] + groups["Alt 2"]
+    )
+
+    placements = []
+    idx = 0
+
+    for col in range(cols):
+        for row in range(rows):
+            if idx < len(ordered):
+                placements.append((ordered[idx].singer_id, row, col))
+                idx += 1
+            else:
+                break
+
+    return placements
+
+
 def apply_placements(
     singers: List[Any], placements: List[Tuple[str, int, int]]
 ) -> None:
