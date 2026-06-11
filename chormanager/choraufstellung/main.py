@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
     QRadioButton
 )
-from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint
+from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint, QThreadPool
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QAction, QUndoStack, QUndoCommand, QActionGroup
 
@@ -1084,7 +1084,9 @@ class MainWindow(QMainWindow):
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self._autosave_check)
         self.autosave_timer.start(120000)
-        
+
+        self.threadpool = QThreadPool(self)
+
         self.setup_ui()
         self.resize(1100, 750)
         
@@ -1527,7 +1529,10 @@ class MainWindow(QMainWindow):
             ],
             "placed": list(placed)
         }
-        self.storage.save_autosave(data)
+        from workers import AutosaveWorker
+        worker = AutosaveWorker(self.storage, data)
+        worker.signals.error.connect(lambda msg: print(f"Autosave error: {msg}"))
+        self.threadpool.start(worker)
 
     def _check_recovery(self):
         """Check for autosave and offer recovery if newer than last manual save."""
@@ -1554,19 +1559,20 @@ class MainWindow(QMainWindow):
     def export_pdf(self):
         from pdf_export_dialog import PDFExportDialog
         from config import get_data_dir
-        
+        from workers import PDFExportWorker
+
         event_date = os.environ.get("CHOR_EVENT_DATE", "") or self.event_date or ""
         event_name = os.environ.get("CHOR_EVENT_NAME", "") or self.event_name or ""
         project_name = os.environ.get("CHOR_PROJECT", "") or self.project_name or ""
-        
+
         if event_date:
             event_date = event_date[:10]
-        
+
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
         date_part = event_date if event_date else today
         default_filename = f"choraufstellung-{date_part}-version-{today}.pdf"
-        
+
         event_info = ""
         if event_name:
             event_info = event_name
@@ -1574,21 +1580,21 @@ class MainWindow(QMainWindow):
             event_info += f" ({event_date})"
         if project_name:
             event_info = f"{project_name}: {event_info}" if event_info else project_name
-        
+
         data_dir = get_data_dir()
         workdir = os.path.join(os.path.dirname(data_dir), "workdir")
         os.makedirs(workdir, exist_ok=True)
-        
+
         dlg = PDFExportDialog(self, default_filename=default_filename, event_info=event_info)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        
+
         settings = dlg.get_settings()
-        
+
         fp = os.path.join(workdir, settings["filename"])
         if not fp.endswith(".pdf"):
             fp += ".pdf"
-        
+
         title = "Choraufstellung"
         subtitle = ""
         if event_name:
@@ -1597,36 +1603,58 @@ class MainWindow(QMainWindow):
             subtitle += f" - {event_date}"
         if project_name:
             subtitle = f"{project_name}: {subtitle}" if subtitle else project_name
-        
-        success = self.pdf.export_formation(
-            self.singers,
-            self.grid.rows,
-            self.grid.cols,
-            fp,
-            title=title,
-            subtitle=subtitle,
-            staggered=self.grid.staggered,
-            orientation=settings["orientation"],
-            color_mode=settings["color_mode"],
+
+        self.statusBar().showMessage("PDF wird exportiert...")
+
+        worker = PDFExportWorker(
+            self.pdf, self.singers, self.grid.rows, self.grid.cols, fp,
+            title=title, subtitle=subtitle, staggered=self.grid.staggered,
+            orientation=settings["orientation"], color_mode=settings["color_mode"],
             text_rotation=settings["text_rotation"]
         )
-        
+        worker.signals.finished.connect(self._on_pdf_export_done)
+        worker.signals.error.connect(self._on_pdf_export_error)
+        self.threadpool.start(worker)
+
+    def _on_pdf_export_done(self, success, message):
         if success:
-            QMessageBox.information(self, "PDF Export", f"PDF exportiert nach:\n{fp}")
+            self.statusBar().showMessage("")
+            QMessageBox.information(self, "PDF Export", f"PDF exportiert nach:\n{message}")
             from PyQt6.QtGui import QDesktopServices
             from PyQt6.QtCore import QUrl
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(fp)))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(message)))
         else:
-            QMessageBox.warning(self, "Fehler", "PDF-Export fehlgeschlagen.")
+            self.statusBar().showMessage("")
+            QMessageBox.warning(self, "Fehler", message)
+
+    def _on_pdf_export_error(self, error_msg):
+        self.statusBar().showMessage("")
+        QMessageBox.critical(self, "Fehler", f"PDF-Export fehlgeschlagen:\n{error_msg}")
 
     def run_optimizer(self):
+        from workers import OptimizerWorker
         d = OptimizerDialog(self)
         if d.exec() == QDialog.DialogCode.Accepted:
             rules = d.get_selected_rules()
             if rules:
                 primary = d.get_primary_rule()
                 refinement = d.get_refinement_rules()
-                self.grid.optimize(primary, refinement)
+                self.statusBar().showMessage("Optimierung läuft...")
+                worker = OptimizerWorker(self.grid, primary, refinement)
+                worker.signals.finished.connect(self._on_optimizer_done)
+                worker.signals.error.connect(self._on_optimizer_error)
+                self.threadpool.start(worker)
+
+    def _on_optimizer_done(self, success, message):
+        self.statusBar().showMessage("")
+        if success:
+            QMessageBox.information(self, "Optimierung", message)
+        else:
+            QMessageBox.warning(self, "Optimierung", message)
+
+    def _on_optimizer_error(self, error_msg):
+        self.statusBar().showMessage("")
+        QMessageBox.critical(self, "Fehler", f"Optimierung fehlgeschlagen:\n{error_msg}")
 
     def show_cfg(self):
         d = VoicingConfigDialog(self)
