@@ -100,9 +100,9 @@ class Singer:
 
 
 def voice_group_color(voice_group: VoiceGroup) -> str:
-    """Return hex color for voice group - loads from central config."""
+    """Return hex color for voice group using canonical config module."""
     try:
-        from config import get_voice_group_color
+        from chormanager.config import get_voice_group_color
         vg_id = voice_group.value if hasattr(voice_group, 'value') else str(voice_group)
         return get_voice_group_color(vg_id)
     except Exception:
