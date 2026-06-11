@@ -49,7 +49,9 @@ def _parse_singer_from_json(s: dict) -> Singer:
     return singer
 
 
-def load_singers_from_event_data_file(event_data_file: str) -> Optional[dict]:
+def load_singers_from_event_data_file(
+    event_data_file: str,
+) -> Optional[dict]:
     """Load singers from a temporary JSON event data file.
 
     Args:
