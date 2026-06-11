@@ -231,6 +231,8 @@ class FormationGrid(QWidget):
         self.undo_stack = None  # Set by MainWindow
         
         self.setAcceptDrops(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_grid_context_menu)
         self.setMinimumSize(
             self.cols * self.CELL_WIDTH + self.MARGIN_LEFT + 50,
             self.rows * self.CELL_HEIGHT + self.MARGIN_TOP + 50
@@ -521,6 +523,70 @@ class FormationGrid(QWidget):
         placements = arrange_s1s2b2b1t2t1a2a1(self.singers, self.rows, self.cols)
         apply_placements(self.singers, placements)
         self.refresh_grid()
+
+    def auto_arrange_s1s2a1a2t1t2b1b2(self):
+        from core.arrangement import arrange_s1s2a1a2t1t2b1b2, apply_placements
+        if not self.singers:
+            return
+        placements = arrange_s1s2a1a2t1t2b1b2(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
+        self.refresh_grid()
+
+    def auto_arrange_s1s2b1b2t1t2a1a2(self):
+        from core.arrangement import arrange_s1s2b1b2t1t2a1a2, apply_placements
+        if not self.singers:
+            return
+        placements = arrange_s1s2b1b2t1t2a1a2(self.singers, self.rows, self.cols)
+        apply_placements(self.singers, placements)
+        self.refresh_grid()
+
+    def apply_affinity_proximity(self, singer):
+        if not singer.affinity:
+            return False
+        partner = next((s for s in self.singers if s.singer_id == singer.affinity), None)
+        if not partner or partner.row < 0 or singer.row < 0:
+            return False
+        if singer.row != partner.row:
+            return False
+        if abs(singer.col - partner.col) == 1:
+            return False
+        target_col = singer.col + 1 if singer.col < partner.col else singer.col - 1
+        if target_col < 0 or target_col >= self.cols:
+            return False
+        occupant = next((s for s in self.singers if s.row == singer.row and s.col == target_col), None)
+        if occupant and occupant.singer_id != partner.singer_id:
+            old_row, old_col = partner.row, partner.col
+            partner.row, partner.col = occupant.row, occupant.col
+            occupant.row, occupant.col = old_row, old_col
+        elif not occupant:
+            partner.row, partner.col = singer.row, target_col
+        self.refresh_grid()
+        return True
+
+    def show_grid_context_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        if len(self.selected_ids) == 1:
+            sid = list(self.selected_ids)[0]
+            singer = next((s for s in self.singers if s.singer_id == sid), None)
+            if singer and singer.affinity:
+                partner = next((s for s in self.singers if s.singer_id == singer.affinity), None)
+                if partner and partner.row >= 0 and singer.row >= 0:
+                    affinity_action = menu.addAction(f" Nähe: {singer.name} → {partner.name} platzieren")
+                    affinity_action.triggered.connect(lambda: self.apply_affinity_proximity(singer))
+                    menu.addSeparator()
+        if len(self.selected_ids) == 2:
+            swap_action = menu.addAction("Positionen tauschen")
+            swap_action.triggered.connect(self.swap_selected_singers)
+            menu.addSeparator()
+        if self.undo_stack:
+            undo_action = menu.addAction("Rückgängig")
+            undo_action.setEnabled(self.undo_stack.canUndo())
+            undo_action.triggered.connect(self.undo_stack.undo)
+            redo_action = menu.addAction("Wiederholen")
+            redo_action.setEnabled(self.undo_stack.canRedo())
+            redo_action.triggered.connect(self.undo_stack.redo)
+        menu.exec(self.mapToGlobal(pos))
     
     def optimize(self, primary_rule=None, refinement_rules=None):
         """Run optimizer with given rules."""
@@ -616,7 +682,7 @@ class FormationGrid(QWidget):
     
     def _move_group(self, group_ids, delta_col, delta_row):
         """Verschiebt eine Gruppe von Sängern."""
-        from core.commands import MoveGroupCommand
+        from core.commands import QtMoveGroupCommand as MoveGroupCommand
         command = MoveGroupCommand(group_ids, delta_col, delta_row, self)
         if self.undo_stack:
             self.undo_stack.push(command)
@@ -625,7 +691,7 @@ class FormationGrid(QWidget):
     
     def _move_singer(self, singer, old_row, old_col, new_row, new_col):
         """Verschiebt einen einzelnen Sänger."""
-        from core.commands import MoveSingerCommand
+        from core.commands import QtMoveSingerCommand as MoveSingerCommand
         command = MoveSingerCommand(singer, old_row, old_col, new_row, new_col, self)
         if self.undo_stack:
             self.undo_stack.push(command)
@@ -645,7 +711,7 @@ class FormationGrid(QWidget):
         if not singer1 or not singer2:
             return
 
-        from core.commands import SwapSingersCommand
+        from core.commands import QtSwapSingersCommand as SwapSingersCommand
         command = SwapSingersCommand(singer1, singer2, self)
         if self.undo_stack:
             self.undo_stack.push(command)
