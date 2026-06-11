@@ -37,6 +37,7 @@ try:
     from ui.theme_manager import apply_theme, build_legend
     from ui.menu_builder import build_menu
     from services.formation_file_service import FormationFileService
+    from services.formation_loader import FormationLoader
 except ImportError:
     from enum import Enum
     class VoiceGroup(Enum):
@@ -958,6 +959,7 @@ class MainWindow(QMainWindow):
         self.is_modified = False
         self.last_manual_save_mtime = 0
         self.file_service = FormationFileService(self)
+        self.formation_loader = FormationLoader(self)
         self._loaded_metadata = {
             "project": project_name or "",
             "event": event_name or "",
@@ -974,7 +976,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 750)
         
         if self.chormanager_mode:
-            self._load_from_chormanager()
+            self.formation_loader.load_from_chormanager()
         else:
             self.file_service.check_recovery()
         
@@ -1244,68 +1246,6 @@ class MainWindow(QMainWindow):
         else:
             e.accept()
 
-    def _load_from_chormanager(self):
-        """Load singers from ChorManager DB or temp JSON file."""
-        import os
-
-        from services.chor_manager_data_service import (
-            load_singers_from_event_data_file,
-            load_singers_from_db,
-        )
-
-        # Check for temp JSON file first (preferred method)
-        event_data_file = os.environ.get("CHOR_EVENT_DATA", "")
-
-        if event_data_file and os.path.exists(event_data_file):
-            result = load_singers_from_event_data_file(event_data_file)
-            if result and result["singers"]:
-                self._loaded_metadata = result["metadata"]
-                self.singers = result["singers"]
-                self.pool.singers = self.singers
-                self.pool.update_singers(self.singers, set())
-                self.is_modified = False
-                return
-
-        # Fallback: Load from DB
-        db_path = os.environ.get("CHOR_DB_PATH", os.path.expanduser("~/.local/share/chormanager/chor.db"))
-        event_id = self.event_id or os.environ.get("CHOR_EVENT_ID", "")
-
-        if not db_path or not os.path.exists(db_path):
-            return
-
-        singers = load_singers_from_db(db_path, event_id=event_id)
-        if singers:
-            self.singers = singers
-            self.pool.singers = self.singers
-            self.pool.update_singers(self.singers, set())
-            self.is_modified = False
-    
-    def _load_formation_data(self, data: dict):
-        """Load formation data from dict (used when opening saved file)."""
-        self.singers = data.get("singers", [])
-        for s in self.singers:
-            if not hasattr(s, 'affinity'):
-                s.affinity = ""
-        self.grid.singers = [s for s in self.singers if s.row >= 0]
-        self.grid.rows = data.get("rows", 3)
-        self.grid.cols = data.get("cols", 4)
-        self.grid.staggered = data.get("staggered", False)
-        self.grid.refresh_grid()
-        self.pool.singers = self.singers
-        self.pool.placed_singer_ids = self.grid.get_placed_singer_ids()
-        self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
-        self.is_modified = False
-        self.update_grid_count()
-        
-        # Sync ComboBoxes with loaded grid dimensions
-        if hasattr(self, 'rs'):
-            self.rs.blockSignals(True)
-            self.rs.setCurrentText(str(self.grid.rows))
-            self.rs.blockSignals(False)
-        if hasattr(self, 'cs'):
-            self.cs.blockSignals(True)
-            self.cs.setCurrentText(str(self.grid.cols))
-            self.cs.blockSignals(False)
 
 
 def main():
@@ -1328,7 +1268,7 @@ def main():
         w.storage.filepath = chor_file
         data = w.storage.load_formation(chor_file)
         if data:
-            w._load_formation_data(data)
+            w.formation_loader.load_formation_data(data)
     
     w.show()
     sys.exit(app.exec())
