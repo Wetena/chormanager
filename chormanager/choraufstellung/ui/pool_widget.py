@@ -420,7 +420,7 @@ class SingerPool(QWidget):
             vg_str = parts[1].strip()
             height = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
             
-            from dependencies import get_valid_voice_groups
+            from config import get_valid_voice_groups
             valid_vgs = get_valid_voice_groups()
             
             if not name or vg_str not in valid_vgs:
