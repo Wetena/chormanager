@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint, QThreadPool
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QAction, QUndoStack, QUndoCommand, QActionGroup
+from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QUndoStack, QUndoCommand
 
 try:
     from config import load_settings, save_settings, load_voice_groups_config, get_valid_voice_groups, get_voice_group_color, get_data_dir, clear_color_cache
@@ -35,6 +35,7 @@ try:
     from ui.optimizer_dialog import OptimizerDialog
     from ui.dialogs import AddSingerDialog, AffinityDialog, VoicingConfigDialog
     from ui.theme_manager import apply_theme, build_legend
+    from ui.menu_builder import build_menu
 except ImportError:
     from enum import Enum
     class VoiceGroup(Enum):
@@ -1025,91 +1026,10 @@ class MainWindow(QMainWindow):
         rl.addLayout(raster_layout)
         sr=QHBoxLayout(); sr.addWidget(QLabel("Suche:")); self.search_input=QLineEdit(); self.search_input.setPlaceholderText("Sänger-Name..."); self.search_input.returnPressed.connect(self.do_quick_search); sr.addWidget(self.search_input); sb=QPushButton("🔍"); sb.setFixedWidth(30); sb.clicked.connect(self.do_quick_search); sr.addWidget(sb); rl.addLayout(sr)
         self.leg=QWidget(); self.llay=QHBoxLayout(self.leg); rl.addWidget(self.leg); build_legend(self.cfg, self.llay)
-        sp.addWidget(rp); sp.setSizes([250,800]); ml.addWidget(sp); self.menu()
+        sp.addWidget(rp); sp.setSizes([250,800]); ml.addWidget(sp); build_menu(self)
         self.pool.placed_singer_ids = set()
         self.pool.singers = self.singers
         self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
-
-    def menu(self):
-        m=self.menuBar()
-        f=m.addMenu("Datei")
-        f.addAction(QAction("Neu", self, shortcut="Ctrl+N", triggered=self.new_f))
-        f.addAction(QAction("Öffnen...", self, shortcut="Ctrl+O", triggered=self.open_f))
-        f.addAction(QAction("Speichern", self, shortcut="Ctrl+S", triggered=self.save_f))
-        f.addAction(QAction("Speichern unter...", self, shortcut="Ctrl+Shift+S", triggered=self.save_as_f))
-        f.addSeparator()
-        f.addAction(QAction("PDF Export...", self, shortcut="Ctrl+E", triggered=self.export_pdf))
-        f.addSeparator()
-        f.addAction(QAction("Beenden", self, shortcut="Ctrl+Q", triggered=self.close))
-        e=m.addMenu("Bearbeiten")
-        e.addAction(QAction("Sänger hinzufügen", self, shortcut="Ctrl+Shift+A", triggered=self.add_singer_via_menu))
-        self.swap_action = QAction("Positionen tauschen", self, shortcut="Ctrl+T", triggered=self.swap_selected_singers)
-        self.swap_action.setEnabled(False)
-        e.addAction(self.swap_action)
-        self.undo_action = QAction("Rückgängig", self, shortcut="Ctrl+Z", triggered=self.undo_last_action)
-        self.redo_action = QAction("Wiederholen", self, shortcut="Ctrl+Y", triggered=self.redo_last_action)
-        self.undo_action.setEnabled(False)
-        self.redo_action.setEnabled(False)
-        e.addAction(self.undo_action)
-        e.addAction(self.redo_action)
-        a=m.addMenu("Aufstellen")
-        size_action = QAction("Aufstellung nach Größe", self)
-        size_action.triggered.connect(self.grid.auto_arrange_by_height)
-        a.addAction(size_action)
-        men_action = QAction("Männer geteilt außen", self)
-        men_action.triggered.connect(self.grid.auto_arrange_men_outer)
-        a.addAction(men_action)
-        satb_action = QAction("SATB", self)
-        satb_action.triggered.connect(self.grid.auto_arrange_satb)
-        a.addAction(satb_action)
-        sbta_action = QAction("SBTA", self)
-        sbta_action.triggered.connect(self.grid.auto_arrange_sbta)
-        a.addAction(sbta_action)
-        s1s2_action = QAction("S1 S2 B2 B1 T2 T1 A2 A1", self)
-        s1s2_action.triggered.connect(self.grid.auto_arrange_s1s2b2b1t2t1a2a1)
-        a.addAction(s1s2_action)
-        s1s2a1a2_action = QAction("S1 S2 A1 A2 T1 T2 B1 B2", self)
-        s1s2a1a2_action.triggered.connect(self.grid.auto_arrange_s1s2a1a2t1t2b1b2)
-        a.addAction(s1s2a1a2_action)
-        s1s2b1b2_action = QAction("S1 S2 B1 B2 T1 T2 A1 A2", self)
-        s1s2b1b2_action.triggered.connect(self.grid.auto_arrange_s1s2b1b2t1t2a1a2)
-        a.addAction(s1s2b1b2_action)
-        a.addSeparator()
-        affinity_action = QAction("Nähe (Singpartner)", self)
-        affinity_action.triggered.connect(self.apply_all_affinity_proximity)
-        a.addAction(affinity_action)
-        a.addSeparator()
-        reset_action = QAction("Aufstellung zurücksetzen", self)
-        reset_action.triggered.connect(self.reset_formation)
-        a.addAction(reset_action)
-        a.addSeparator()
-        opt_action = QAction("Optimiert aufstellen...", self)
-        opt_action.triggered.connect(self.run_optimizer)
-        a.addAction(opt_action)
-        k=m.addMenu("Konfigurieren")
-        cfg_action = QAction("Besetzung konfigurieren...", self)
-        cfg_action.setEnabled(True)
-        cfg_action.triggered.connect(self.show_cfg)
-        k.addAction(cfg_action)
-        
-        v = m.addMenu("&Ansicht")
-        self.theme_group = QActionGroup(self)
-        self.theme_group.setExclusive(True)
-        
-        self.actionLight = QAction("Light", self)
-        self.actionLight.setCheckable(True)
-        self.actionLight.triggered.connect(lambda: apply_theme(self, "light"))
-        v.addAction(self.actionLight)
-        self.theme_group.addAction(self.actionLight)
-        
-        self.actionDark = QAction("Dark", self)
-        self.actionDark.setCheckable(True)
-        self.actionDark.triggered.connect(lambda: apply_theme(self, "dark"))
-        v.addAction(self.actionDark)
-        self.theme_group.addAction(self.actionDark)
-        
-        h=m.addMenu("&Hilfe")
-        h.addAction(QAction("Über", self, triggered=self.show_about))
 
     def add_to_grid(self, singer):
         if not self.grid.place_singer(singer):
