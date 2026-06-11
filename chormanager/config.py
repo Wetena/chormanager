@@ -210,7 +210,7 @@ def reload_config():
     _load_fields_raw.cache_clear()
     _load_app_config_raw.cache_clear()
     
-    return config
+    return load_app_config()
 
 
 def get_voice_group_choices():

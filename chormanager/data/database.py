@@ -182,11 +182,6 @@ class Database:
             )
         """)
 
-        try:
-            conn.execute("ALTER TABLE repertoire RENAME COLUMN program TO project_id")
-        except sqlite3.OperationalError:
-            pass
-
         conn.commit()
 
         for col, typ in [

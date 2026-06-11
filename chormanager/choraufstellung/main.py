@@ -82,20 +82,6 @@ except ImportError:
     class GridEngine:
         def __init__(self, *a): pass
 
-class DraggableListWidget(QListWidget):
-    def startDrag(self, actions):
-        item = self.currentItem()
-        if item:
-            singer = item.data(Qt.ItemDataRole.UserRole)
-            if singer:
-                drag = QDrag(self)
-                mime = QMimeData()
-                mime.setText(f"singer:{singer.singer_id}")
-                drag.setMimeData(mime)
-                drag.exec(Qt.DropAction.CopyAction)
-        else:
-            super().startDrag(actions)
-
 class DraggableTableWidget(QTableWidget):
     def startDrag(self, actions):
         selected = self.selectedItems()
