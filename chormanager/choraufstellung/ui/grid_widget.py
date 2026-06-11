@@ -375,17 +375,17 @@ class FormationGrid(QWidget):
 
     def refresh_grid(self):
         for tile in list(self.tiles.values()):
+            tile.removeEventFilter(self)
+            tile.removed.disconnect()
+            tile.edit_requested.disconnect()
+            tile.affinity_requested.disconnect()
             tile.deleteLater()
         self.tiles.clear()
-        
-        for label in list(self.findChildren(QLabel)):
-            if label.text().startswith("Reihe "):
-                label.deleteLater()
-        
-        for cell in list(self.findChildren(QFrame)):
-            if hasattr(cell, '_is_grid_cell'):
-                cell.deleteLater()
-        
+
+        for child in list(self.children()):
+            if isinstance(child, QFrame) and getattr(child, '_is_grid_cell', False):
+                child.deleteLater()
+
         for r in range(self.rows):
             for c in range(self.cols):
                 cell = QFrame(self)
@@ -404,7 +404,7 @@ class FormationGrid(QWidget):
                 """)
                 cell.lower()
                 cell.show()
-        
+
         for singer in self.singers:
             if singer.row >= 0 and singer.col >= 0:
                 tile = SingerTile(singer)
@@ -412,18 +412,18 @@ class FormationGrid(QWidget):
                 tile.removed.connect(self.on_tile_removed)
                 tile.edit_requested.connect(self.on_tile_edit_requested)
                 tile.affinity_requested.connect(self.on_tile_affinity_requested)
-                
+
                 x = self.MARGIN_LEFT + singer.col * self.CELL_WIDTH
                 if self.staggered and singer.row % 2 == 1:
                     x += self.OFFSET
                 y = self.MARGIN_TOP + singer.row * self.CELL_HEIGHT
-                
+
                 tile.setParent(self)
                 tile.move(x, y)
                 tile.show()
                 tile.installEventFilter(self)
                 self.tiles[singer.singer_id] = tile
-        
+
         self.update_selection_visuals()
         self.update()
         self.updateGeometry()
