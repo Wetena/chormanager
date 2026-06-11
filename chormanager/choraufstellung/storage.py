@@ -1,12 +1,13 @@
 import json
 import os
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 
-def _get_data_dir() -> str:
+def _get_data_dir() -> Path:
     """Returns data directory in program folder."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    return Path(__file__).parent / "data"
 
 
 class FormationStorage:
@@ -22,7 +23,7 @@ class FormationStorage:
                        voicing_config: List[str] = None,
                        metadata: Dict[str, Any] = None) -> bool:
         """Save formation data to JSON file"""
-        target_path = filepath or self.filepath
+        target_path = Path(filepath or self.filepath)
         if not target_path:
             raise ValueError("No filepath specified")
         
@@ -55,11 +56,9 @@ class FormationStorage:
                 "metadata": metadata or {}
             }
             
-            directory = os.path.dirname(target_path)
-            if directory and not os.path.exists(directory):
-                os.makedirs(directory)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             
-            temp_path = target_path + ".tmp"
+            temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
             with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             os.replace(temp_path, target_path)
@@ -70,11 +69,11 @@ class FormationStorage:
     
     def load_formation(self, filepath: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Load formation data from JSON file"""
-        target_path = filepath or self.filepath
+        target_path = Path(filepath or self.filepath)
         if not target_path:
             raise ValueError("No filepath specified")
             
-        if not os.path.exists(target_path):
+        if not target_path.exists():
             print(f"File not found: {target_path}")
             return None
             
@@ -117,13 +116,10 @@ class FormationStorage:
             print(f"Error loading formation: {e}")
             return None
 
-    # --- AUTOSAVE: Backup-Funktionalität ---
-    def _get_backup_dir(self) -> str:
+    def _get_backup_dir(self) -> Path:
         """Erstellt Backup-Verzeichnis und gibt Pfad zurück."""
-        data_dir = _get_data_dir()
-        backup_dir = os.path.join(data_dir, "backups")
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir, exist_ok=True)
+        backup_dir = _get_data_dir() / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
         return backup_dir
 
     def save_autosave(self, data: dict, max_keep: int = 5) -> bool:
@@ -132,15 +128,15 @@ class FormationStorage:
             backup_dir = self._get_backup_dir()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"autosave_{timestamp}.json"
-            filepath = os.path.join(backup_dir, filename)
+            filepath = backup_dir / filename
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
-            latest_link = os.path.join(backup_dir, "latest_autosave.json")
-            if os.path.exists(latest_link):
-                os.remove(latest_link)
-            os.symlink(filename, latest_link)
+            latest_link = backup_dir / "latest_autosave.json"
+            if latest_link.exists():
+                latest_link.unlink()
+            latest_link.symlink_to(filename)
             
             self._rotate_backups(backup_dir, max_keep)
             
@@ -152,20 +148,19 @@ class FormationStorage:
             print(f"Auto-save error: {e}")
             return False
 
-    def _rotate_backups(self, backup_dir: str, max_keep: int):
+    def _rotate_backups(self, backup_dir: Path, max_keep: int):
         """Löscht älteste Backups, falls mehr als max_keep vorhanden."""
         try:
-            autosave_files = [
-                f for f in os.listdir(backup_dir) 
-                if f.startswith("autosave_") and f.endswith(".json")
-            ]
-            autosave_files.sort()
+            autosave_files = sorted([
+                f.name for f in backup_dir.iterdir()
+                if f.name.startswith("autosave_") and f.name.endswith(".json")
+            ])
             
             while len(autosave_files) > max_keep:
                 oldest = autosave_files.pop(0)
-                oldest_path = os.path.join(backup_dir, oldest)
-                if os.path.exists(oldest_path):
-                    os.remove(oldest_path)
+                oldest_path = backup_dir / oldest
+                if oldest_path.exists():
+                    oldest_path.unlink()
         except OSError as e:
             print(f"Backup rotation error: {e}")
 
@@ -173,12 +168,12 @@ class FormationStorage:
         """Gibt Pfad zum neuesten Auto-Save zurück."""
         try:
             backup_dir = self._get_backup_dir()
-            latest_link = os.path.join(backup_dir, "latest_autosave.json")
-            if os.path.exists(latest_link):
+            latest_link = backup_dir / "latest_autosave.json"
+            if latest_link.exists():
                 target = os.readlink(latest_link)
-                full_path = os.path.join(backup_dir, target)
-                if os.path.exists(full_path):
-                    return full_path
+                full_path = backup_dir / target
+                if full_path.exists():
+                    return str(full_path)
             return None
         except OSError:
             return None
@@ -186,21 +181,21 @@ class FormationStorage:
     def get_latest_autosave_mtime(self) -> Optional[float]:
         """Gibt mtime des neuesten Auto-Save zurück."""
         path = self.get_latest_autosave_path()
-        if path and os.path.exists(path):
-            return os.path.getmtime(path)
+        if path and Path(path).exists():
+            return Path(path).stat().st_mtime
         return None
 
     def delete_latest_autosave(self) -> bool:
         """Löscht den neuesten Auto-Save."""
         try:
             backup_dir = self._get_backup_dir()
-            latest_link = os.path.join(backup_dir, "latest_autosave.json")
-            if os.path.exists(latest_link):
+            latest_link = backup_dir / "latest_autosave.json"
+            if latest_link.exists():
                 target = os.readlink(latest_link)
-                full_path = os.path.join(backup_dir, target)
-                if os.path.exists(full_path):
-                    os.remove(full_path)
-                os.remove(latest_link)
+                full_path = backup_dir / target
+                if full_path.exists():
+                    full_path.unlink()
+                latest_link.unlink()
             return True
         except OSError as e:
             print(f"Error deleting latest autosave: {e}")

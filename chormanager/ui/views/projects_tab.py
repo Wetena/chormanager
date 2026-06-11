@@ -14,28 +14,14 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QLineEdit as QLineEditW,
     QTextEdit,
-    QStyledItemDelegate,
-    QComboBox,
     QComboBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QPainter
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from ...data.database import Database
 from ...domain.repository import ProjectRepository, EventRepository
 from ...config import get_last_active_project_id, set_last_active_project_id
-
-
-class PaddedDelegate(QStyledItemDelegate):
-    """Custom delegate with padding for better text display."""
-
-    def sizeHint(self, option, index):
-        size = super().sizeHint(option, index)
-        return QSize(size.width(), size.height() + 10)
-
-    def paint(self, painter, option, index):
-        option.rect = option.rect.adjusted(0, 5, 0, -5)
-        super().paint(painter, option, index)
+from ..delegates import PaddedDelegate
 
 
 class ProjectDialog:

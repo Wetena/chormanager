@@ -11,51 +11,35 @@ except ImportError:
         else:
             return obj.exec_(action)
 
-# PyQt6 and PyQt5 compatibility - handle enum changes between versions
-try:
-    from PyQt6.QtWidgets import (
-        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
-        QFileDialog, QDialog, QFormLayout, QLineEdit, QComboBox, QListWidget,
-        QListWidgetItem, QScrollArea, QMessageBox, QFrame, QCheckBox, QSplitter,
-        QGraphicsDropShadowEffect, QRubberBand,
-        QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-        QRadioButton
-    )
-    from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint
-    from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-    from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QAction, QUndoStack, QUndoCommand, QActionGroup
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
+    QFileDialog, QDialog, QFormLayout, QLineEdit, QComboBox, QListWidget,
+    QListWidgetItem, QScrollArea, QMessageBox, QFrame, QCheckBox, QSplitter,
+    QGraphicsDropShadowEffect, QRubberBand,
+    QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
+    QRadioButton
+)
+from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint
+from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QAction, QUndoStack, QUndoCommand, QActionGroup
 
-    QFrame.Panel = QFrame.Shape.Panel
-    QFrame.Raised = QFrame.Shadow.Raised
-    QFrame.Sunken = QFrame.Shadow.Sunken
-    QFrame.HLine = QFrame.Shape.HLine
-    QFrame.VLine = QFrame.Shape.VLine
-    QFrame.StyledPanel = QFrame.Shape.StyledPanel
-    QFrame.NoFrame = QFrame.Shape.NoFrame
+QFrame.Panel = QFrame.Shape.Panel
+QFrame.Raised = QFrame.Shadow.Raised
+QFrame.Sunken = QFrame.Shadow.Sunken
+QFrame.HLine = QFrame.Shape.HLine
+QFrame.VLine = QFrame.Shape.VLine
+QFrame.StyledPanel = QFrame.Shape.StyledPanel
+QFrame.NoFrame = QFrame.Shape.NoFrame
 
-    Qt.Horizontal = Qt.Orientation.Horizontal
-    Qt.Vertical = Qt.Orientation.Vertical
-    Qt.AlignCenter = Qt.AlignmentFlag.AlignCenter
-    Qt.AlignRight = Qt.AlignmentFlag.AlignRight
-    Qt.AlignTop = Qt.AlignmentFlag.AlignTop
-    Qt.LeftButton = Qt.MouseButton.LeftButton
-    Qt.RightButton = Qt.MouseButton.RightButton
-    Qt.ControlModifier = Qt.KeyboardModifier.ControlModifier
-
-except ImportError:
-    from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
-        QFileDialog, QDialog, QFormLayout, QLineEdit, QComboBox, QListWidget,
-        QListWidgetItem, QScrollArea, QMessageBox, QFrame, QCheckBox, QSplitter,
-        QUndoStack, QUndoCommand, QGraphicsDropShadowEffect, QRubberBand,
-        QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-        QRadioButton
-    )
-    from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer
-    from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
-    from PyQt5.QtGui import QDrag, QColor, QPalette, QFont, QAction, QActionGroup
+Qt.Horizontal = Qt.Orientation.Horizontal
+Qt.Vertical = Qt.Orientation.Vertical
+Qt.AlignCenter = Qt.AlignmentFlag.AlignCenter
+Qt.AlignRight = Qt.AlignmentFlag.AlignRight
+Qt.AlignTop = Qt.AlignmentFlag.AlignTop
+Qt.LeftButton = Qt.MouseButton.LeftButton
+Qt.RightButton = Qt.MouseButton.RightButton
+Qt.ControlModifier = Qt.KeyboardModifier.ControlModifier
 
 try:
     from config import load_settings, save_settings, load_voice_groups_config, get_valid_voice_groups, get_voice_group_color, get_data_dir, clear_color_cache
@@ -67,11 +51,6 @@ except ImportError:
     def get_voice_group_color(v): return "#cccccc"
     def get_data_dir(): return "."
     def clear_color_cache(): pass
-
-try:
-    from PyQt6.QtWidgets import QDialog
-except ImportError:
-    from PyQt5.QtWidgets import QDialog
 
 try:
     from singer_model import Singer, VoiceGroup, voice_group_color
@@ -752,20 +731,34 @@ class FormationGrid(QWidget):
                 s.row = s.col = -1
         self.refresh_grid()
     
-    def auto_arrange_satb(self):
+    def _auto_arrange_by_groups(self, group_order):
+        """Arrange singers by voice group ordering.
+        
+        Args:
+            group_order: List of voice group names in display order.
+        """
         if not self.singers:
             return
+        
         def get_vg(vg):
             return vg.value if hasattr(vg, 'value') else str(vg)
-        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
-        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
-        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
-        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
-        sopran.sort(key=lambda s: s.name)
-        alt.sort(key=lambda s: s.name)
-        tenor.sort(key=lambda s: s.name)
-        bass.sort(key=lambda s: s.name)
-        ordered = sopran + alt + tenor + bass
+        
+        groups = {}
+        for s in self.singers:
+            vg = get_vg(s.voice_group)
+            if vg not in groups:
+                groups[vg] = []
+            groups[vg].append(s)
+        
+        for vg in groups:
+            groups[vg].sort(key=lambda s: s.name)
+        
+        ordered = []
+        for vg_name in group_order:
+            if vg_name in groups:
+                ordered.extend(groups[vg_name])
+        
+        placed_ids = set()
         idx = 0
         for col in range(self.cols):
             for row in range(self.rows):
@@ -773,44 +766,23 @@ class FormationGrid(QWidget):
                     s = ordered[idx]
                     s.row = row
                     s.col = col
+                    placed_ids.add(s.singer_id)
                     idx += 1
                 else:
                     break
+        
         for s in self.singers:
-            if s not in ordered[:idx]:
+            if s.singer_id not in placed_ids:
                 s.row = -1
                 s.col = -1
+        
         self.refresh_grid()
     
+    def auto_arrange_satb(self):
+        self._auto_arrange_by_groups(["Sopran 1", "Sopran 2", "Alt 1", "Alt 2", "Tenor 1", "Tenor 2", "Bass 1", "Bass 2"])
+    
     def auto_arrange_sbta(self):
-        if not self.singers:
-            return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
-        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
-        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
-        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
-        sopran.sort(key=lambda s: s.name)
-        alt.sort(key=lambda s: s.name)
-        tenor.sort(key=lambda s: s.name)
-        bass.sort(key=lambda s: s.name)
-        ordered = sopran + bass + tenor + alt
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s not in ordered[:idx]:
-                s.row = -1
-                s.col = -1
-        self.refresh_grid()
+        self._auto_arrange_by_groups(["Sopran 1", "Sopran 2", "Bass 1", "Bass 2", "Tenor 1", "Tenor 2", "Alt 1", "Alt 2"])
     
     def optimize(self, primary_rule=None, refinement_rules=None):
         rule_ids = []
@@ -912,124 +884,13 @@ class FormationGrid(QWidget):
         self.refresh_grid()
 
     def auto_arrange_s1s2b2b1t2t1a2a1(self):
-        if not self.singers:
-            return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        s1 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 1"]
-        s2 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 2"]
-        b2 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 2"]
-        b1 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 1"]
-        t2 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 2"]
-        t1 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 1"]
-        a2 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 2"]
-        a1 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 1"]
-        s1.sort(key=lambda s: s.name)
-        s2.sort(key=lambda s: s.name)
-        b2.sort(key=lambda s: s.name)
-        b1.sort(key=lambda s: s.name)
-        t2.sort(key=lambda s: s.name)
-        t1.sort(key=lambda s: s.name)
-        a2.sort(key=lambda s: s.name)
-        a1.sort(key=lambda s: s.name)
-        ordered = s1 + s2 + b2 + b1 + t2 + t1 + a2 + a1
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
-        self.refresh_grid()
+        self._auto_arrange_by_groups(["Sopran 1", "Sopran 2", "Bass 2", "Bass 1", "Tenor 2", "Tenor 1", "Alt 2", "Alt 1"])
 
     def auto_arrange_s1s2a1a2t1t2b1b2(self):
-        if not self.singers:
-            return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        s1 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 1"]
-        s2 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 2"]
-        a1 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 1"]
-        a2 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 2"]
-        t1 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 1"]
-        t2 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 2"]
-        b1 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 1"]
-        b2 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 2"]
-        s1.sort(key=lambda s: s.name)
-        s2.sort(key=lambda s: s.name)
-        a1.sort(key=lambda s: s.name)
-        a2.sort(key=lambda s: s.name)
-        t1.sort(key=lambda s: s.name)
-        t2.sort(key=lambda s: s.name)
-        b1.sort(key=lambda s: s.name)
-        b2.sort(key=lambda s: s.name)
-        ordered = s1 + s2 + a1 + a2 + t1 + t2 + b1 + b2
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
-        self.refresh_grid()
+        self._auto_arrange_by_groups(["Sopran 1", "Sopran 2", "Alt 1", "Alt 2", "Tenor 1", "Tenor 2", "Bass 1", "Bass 2"])
 
     def auto_arrange_s1s2b1b2t1t2a1a2(self):
-        if not self.singers:
-            return
-        def get_vg(vg):
-            return vg.value if hasattr(vg, 'value') else str(vg)
-        s1 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 1"]
-        s2 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 2"]
-        b1 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 1"]
-        b2 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 2"]
-        t1 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 1"]
-        t2 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 2"]
-        a1 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 1"]
-        a2 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 2"]
-        s1.sort(key=lambda s: s.name)
-        s2.sort(key=lambda s: s.name)
-        b1.sort(key=lambda s: s.name)
-        b2.sort(key=lambda s: s.name)
-        t1.sort(key=lambda s: s.name)
-        t2.sort(key=lambda s: s.name)
-        a1.sort(key=lambda s: s.name)
-        a2.sort(key=lambda s: s.name)
-        ordered = s1 + s2 + b1 + b2 + t1 + t2 + a1 + a2
-        placed_ids = set()
-        idx = 0
-        for col in range(self.cols):
-            for row in range(self.rows):
-                if idx < len(ordered):
-                    s = ordered[idx]
-                    s.row = row
-                    s.col = col
-                    placed_ids.add(s.singer_id)
-                    idx += 1
-                else:
-                    break
-        for s in self.singers:
-            if s.singer_id not in placed_ids:
-                s.row = -1
-                s.col = -1
-        self.refresh_grid()
+        self._auto_arrange_by_groups(["Sopran 1", "Sopran 2", "Bass 1", "Bass 2", "Tenor 1", "Tenor 2", "Alt 1", "Alt 2"])
 
 class SingerPool(QWidget):
     singer_selected = pyqtSignal(object); singer_added = pyqtSignal(object)
@@ -1483,7 +1344,6 @@ class MainWindow(QMainWindow):
         v.addAction(self.actionDark)
         self.theme_group.addAction(self.actionDark)
         
-        self._menu_legenda()
         h=m.addMenu("&Hilfe")
         h.addAction(QAction("Über", self, triggered=self.show_about))
 
@@ -1980,14 +1840,6 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"background: {vg_color}; padding: 4px; color: #000;")
             self.llay.addWidget(l)
         self.llay.addStretch()
-
-    def _menu_legenda(self):
-        for m in self.menuBar().findChildren(QMenu):
-            if m.title() == "&Hilfe":
-                continue
-            for a in m.actions():
-                if a.text() == "Über":
-                    continue
 
     def show_about(self):
         QMessageBox.about(self, "Über Choraufstellung", "Choraufstellung 1.0\n\nVerwaltung von Choraufstellungen.")

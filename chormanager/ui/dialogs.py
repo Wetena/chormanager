@@ -1,5 +1,22 @@
 """Dialogs for event management."""
 
+import re
+
+
+def sanitize_filename(name: str, max_length: int = 100) -> str:
+    """Sanitize a string for use in filenames.
+    
+    Args:
+        name: Input string to sanitize.
+        max_length: Maximum length of output.
+        
+    Returns:
+        Safe filename string.
+    """
+    safe = re.sub(r'[^\w\-]', '_', name)
+    return safe[:max_length]
+
+
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -511,29 +528,16 @@ class EventAvailabilityDialog(QDialog):
 
         logger = logging.getLogger(__name__)
 
-        trace_file = "/tmp/chormanager_trace.txt"
-        with open(trace_file, "a") as f:
-            f.write(f"Dialog _load_availability called\n")
-            f.write(
-                f"besetzung_ids: {len(self.besetzung_ids) if self.besetzung_ids else None}\n"
-            )
-
         singers = self.singer_repo.get_active()
         logger.info(f"_load_availability: loaded {len(singers)} active singers")
 
         if self.besetzung_ids is not None:
             singers_filtered = [s for s in singers if s.id in self.besetzung_ids]
-            with open(trace_file, "a") as f:
-                f.write(
-                    f"Filtered from {len(singers)} to {len(singers_filtered)} singers\n"
-                )
             logger.info(
                 f"_load_availability: filtered to {len(singers_filtered)} singers (besetzung_ids has {len(self.besetzung_ids)} IDs)"
             )
             singers = singers_filtered
         else:
-            with open(trace_file, "a") as f:
-                f.write("No filter applied (besetzung_ids is None)\n")
             logger.info("_load_availability: no filter applied (besetzung_ids is None)")
 
         search_text = self.search_box.text().strip().lower()
@@ -632,32 +636,10 @@ class EventAvailabilityDialog(QDialog):
 
         self.table.resizeColumnsToContents()
 
-        yes_count = sum(
-            1
-            for s in singers
-            if self.avail_repo.get_by_ids(s.id, self.event.id)
-            and self.avail_repo.get_by_ids(s.id, self.event.id).status == "yes"
-        )
-        no_count = sum(
-            1
-            for s in singers
-            if self.avail_repo.get_by_ids(s.id, self.event.id)
-            and self.avail_repo.get_by_ids(s.id, self.event.id).status == "no"
-        )
-        none_count = sum(
-            1
-            for s in singers
-            if not self.avail_repo.get_by_ids(s.id, self.event.id)
-            or self.avail_repo.get_by_ids(s.id, self.event.id).status == "none"
-        )
-
-        total_yes = yes_count
-        total_conditional = sum(
-            1
-            for s in singers
-            if self.avail_repo.get_by_ids(s.id, self.event.id)
-            and self.avail_repo.get_by_ids(s.id, self.event.id).status == "conditional"
-        )
+        total_yes = sum(1 for sid, (_, status) in self.status_widgets.items() if status == "yes")
+        total_conditional = sum(1 for sid, (_, status) in self.status_widgets.items() if status == "conditional")
+        no_count = sum(1 for sid, (_, status) in self.status_widgets.items() if status == "no")
+        none_count = sum(1 for sid, (_, status) in self.status_widgets.items() if status in (None, "none"))
 
         summary_html = f"<b>Zusammenfassung:</b> {total_yes} verbindlich, {total_conditional} unter Vorbehalt, {no_count} Absage, {none_count} offen"
 
@@ -739,7 +721,8 @@ class EventAvailabilityDialog(QDialog):
             filename_str += f"-{project_name}"
         filename_str += ".pdf"
 
-        export_dir = Path("/media/data/coding/chormanager/workdir")
+        from ..config import get_app_dir
+        export_dir = get_app_dir() / "workdir"
         export_dir.mkdir(parents=True, exist_ok=True)
         filename = export_dir / filename_str
 
@@ -750,31 +733,6 @@ class EventAvailabilityDialog(QDialog):
         title_style = ParagraphStyle(
             "CustomTitle", parent=styles["Heading1"], fontSize=14, spaceAfter=10
         )
-
-        event_date = (
-            self.event.date[:10]
-            if self.event.date and len(self.event.date) >= 10
-            else "ohne Datum"
-        )
-        event_type = self.event.event_type or "ohne Typ"
-
-        project_name = ""
-        if self.event.project_id:
-            from ..domain.repository import ProjectRepository
-
-            project_repo = ProjectRepository(self.db)
-            project = project_repo.get_by_id(self.event.project_id)
-            if project:
-                project_name = project.name
-
-        filename_str = f"{event_date}-{event_type}"
-        if project_name:
-            filename_str += f"-{project_name}"
-        filename_str += ".pdf"
-
-        export_dir = Path("/media/data/coding/chormanager/workdir")
-        export_dir.mkdir(parents=True, exist_ok=True)
-        filename = export_dir / filename_str
 
         elements.append(Paragraph(f"Verfügbarkeit: {self.event.name}", title_style))
         elements.append(
@@ -952,7 +910,7 @@ class EventAvailabilityDialog(QDialog):
             ext_filter = "CSV (*.csv)"
 
         today = datetime.now().strftime("%Y-%m-%d")
-        safe_event = self.event.name.replace(" ", "-").replace("/", "-")
+        safe_event = sanitize_filename(self.event.name)
         ext_map = {"writer": "odt", "calc": "ods", "csv": "csv"}
         ext = ext_map.get(fmt, "csv")
         default_name = f"{today}-verfuegbarkeit-{safe_event}.{ext}"
@@ -1060,15 +1018,15 @@ class ConfigDialog(QDialog):
         choraufstellung_group = QGroupBox("Choraufstellung-Integration")
         choraufstellung_layout = QFormLayout()
 
+        from ..config import get_app_dir
+        default_chor_path = str(get_app_dir() / "chormanager" / "choraufstellung")
         self.choraufstellung_path_input = QLineEdit()
-        self.choraufstellung_path_input.setText("/media/data/coding/choraufstellung")
+        self.choraufstellung_path_input.setText(default_chor_path)
         choraufstellung_layout.addRow("App-Pfad:", self.choraufstellung_path_input)
 
         reset_chor_btn = QPushButton("Zurücksetzen")
         reset_chor_btn.clicked.connect(
-            lambda: self.choraufstellung_path_input.setText(
-                "/media/data/coding/choraufstellung"
-            )
+            lambda: self.choraufstellung_path_input.setText(default_chor_path)
         )
         choraufstellung_layout.addRow("", reset_chor_btn)
 
@@ -1402,7 +1360,7 @@ class SingerSelectionDialog(QDialog):
         ext_map = {"writer": "odt", "calc": "ods", "csv": "csv"}
         ext = ext_map.get(fmt, "csv")
         today = datetime.now().strftime("%Y-%m-%d")
-        safe_name = self.besetzung_name.replace(" ", "-").replace("/", "-")
+        safe_name = sanitize_filename(self.besetzung_name)
         default_name = f"{today}-{safe_name}.{ext}"
         workdir = Path(__file__).parent.parent.parent / "workdir"
         workdir.mkdir(exist_ok=True)

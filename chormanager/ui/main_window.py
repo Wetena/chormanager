@@ -36,12 +36,6 @@ from PyQt6.QtGui import QAction, QKeySequence
 
 from ..data.database import Database
 from ..domain.repository import SingerRepository
-from ..history.service import (
-    HistoryService,
-    CreateSingerCommand,
-    UpdateSingerCommand,
-    DeleteSingerCommand,
-)
 from ..backup.service import AutoBackupService
 from ..config import (
     load_voice_groups,
@@ -124,7 +118,7 @@ class SingerDialog(QDialog):
                 self.inputs[name] = widget
                 layout.addRow(label, widget)
 
-            if field_type == "string":
+            elif field_type == "string":
                 widget = QLineEdit()
                 self.inputs[name] = widget
                 layout.addRow(label, widget)
@@ -306,11 +300,14 @@ class MainWindow(QMainWindow):
 
         self.db_path = db_path
         self.db = Database(db_path)
-        self.db.connect()
-        self.db.create_tables()
+        try:
+            self.db.connect()
+            self.db.create_tables()
+        except Exception:
+            self.db.close()
+            raise
 
         self.singer_repo = SingerRepository(self.db)
-        self.history = HistoryService(max_entries=100)
         self.backup_service = AutoBackupService()
 
         if self.db_path:
@@ -467,22 +464,6 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-
-        edit_menu = menubar.addMenu("&Bearbeiten")
-
-        undo_action = QAction("Rückgängig", self)
-        undo_action.setIcon(get_icon("edit-undo", QStyle.StandardPixmap.SP_ArrowBack))
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        undo_action.triggered.connect(self._undo)
-        edit_menu.addAction(undo_action)
-
-        redo_action = QAction("Wiederholen", self)
-        redo_action.setIcon(
-            get_icon("edit-redo", QStyle.StandardPixmap.SP_ArrowForward)
-        )
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        redo_action.triggered.connect(self._redo)
-        edit_menu.addAction(redo_action)
 
         projekt_menu = menubar.addMenu("&Projekt")
 
@@ -1233,15 +1214,6 @@ class MainWindow(QMainWindow):
                 delete_action.triggered.connect(self.repertoire_tab._delete_repertoire)
                 self.context_toolbar.addAction(delete_action)
 
-    def _on_selection_changed(self, tab_index, selection):
-        """Handle selection change from any tab to update context toolbar.
-
-        Args:
-            tab_index: Index of the tab (int)
-            selection: Selected object (Project/Event/Singer) or None
-        """
-        self._update_context_toolbar(tab_index, selection)
-
     def _update_info_labels(self):
         """Update the info labels in the info bar."""
         # Update project info label
@@ -1300,31 +1272,22 @@ class MainWindow(QMainWindow):
             self.besetzung_info_label.setText("Keine")
             self.besetzung_info_label.setVisible(False)
 
-    def _on_tab_changed(self, index):
-        if index == 2:
-            self.events_tab._load_events()
-        elif index == 3:
-            QTimer.singleShot(0, self.choraufstellung_tab._load_formations)
-        self._emit_selection(index)
-
     def _create_status_bar(self):
         """Create status bar."""
         self.statusBar().showMessage("Bereit")
 
     def _refresh_tabs(self):
         """Refresh all tabs."""
+        if hasattr(self, "projects_tab"):
+            self.projects_tab._load_projects()
         if hasattr(self, "singers_tab"):
             self.singers_tab._load_singers()
+        if hasattr(self, "besetzung_tab"):
+            self.besetzung_tab._load_besetzungen()
         if hasattr(self, "events_tab"):
             self.events_tab._load_events()
-
-    def _on_search_text_changed(self, text):
-        """Handle search text change."""
-        self.singers_tab._load_singers()
-
-    def _on_filter_changed(self, index):
-        """Handle voice group filter change."""
-        self.singers_tab._load_singers()
+        if hasattr(self, "repertoire_tab"):
+            self.repertoire_tab._load_repertoire()
 
     def _add_singer(self):
         """Add new singer."""
@@ -1454,618 +1417,19 @@ class MainWindow(QMainWindow):
     def _new_formation(self):
         self.choraufstellung_tab._new_formation()
 
-    def _undo(self):
-        """Undo last action."""
-        if self.history.can_undo():
-            self.history.undo()
-            self._refresh_tabs()
-            self.statusBar().showMessage("Rückgängig gemacht")
-
-    def _redo(self):
-        """Redo last undone action."""
-        if self.history.can_redo():
-            self.history.redo()
-            self._refresh_tabs()
-            self.statusBar().showMessage("Wiederholt")
-
-    def _export_csv(self):
-        """Export to CSV."""
-        from PyQt6.QtWidgets import QFileDialog
-
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Als CSV exportieren", "", "CSV Dateien (*.csv)"
-        )
-
-        if filename:
-            singers = self.singer_repo.get_all()
-            fields = self.singers_tab.visible_fields
-
-            import csv
-
-            with open(filename, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f, fieldnames=[field["name"] for field in fields]
-                )
-                writer.writeheader()
-
-                for singer in singers:
-                    row = {}
-                    for field in fields:
-                        name = field["name"]
-                        value = getattr(singer, name, "")
-                        row[name] = value if value else ""
-                    writer.writerow(row)
-
-            self.statusBar().showMessage(f"Exportiert nach {filename}")
-
-    def _export_pdf(self):
-        """Export to PDF."""
-        from PyQt6.QtWidgets import QFileDialog
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.platypus import (
-            SimpleDocTemplate,
-            Table,
-            TableStyle,
-            Paragraph,
-            Spacer,
-        )
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Als PDF exportieren", "", "PDF Dateien (*.pdf)"
-        )
-
-        if not filename:
-            return
-
-        singers = self.singer_repo.get_all()
-
-        doc = SimpleDocTemplate(filename, pagesize=A4)
-        elements = []
-        styles = getSampleStyleSheet()
-
-        title_style = ParagraphStyle(
-            "CustomTitle", parent=styles["Heading1"], fontSize=18, spaceAfter=20
-        )
-
-        elements.append(Paragraph("Chor-Teilnehmerliste", title_style))
-        elements.append(Spacer(1, 0.5 * cm))
-
-        data = [["Name", "Stimmgruppe", "E-Mail", "Telefon"]]
-        for singer in singers:
-            data.append(
-                [
-                    singer.full_name or "",
-                    singer.voice_group or "",
-                    singer.email or "",
-                    singer.phone or "",
-                ]
-            )
-
-        table = Table(data, colWidths=[5 * cm, 3 * cm, 4 * cm, 3 * cm])
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 12),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
-                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                    ("FONTSIZE", (0, 1), (-1, -1), 10),
-                ]
-            )
-        )
-
-        elements.append(table)
-
-        doc.build(elements)
-
-        self.statusBar().showMessage(f"Exportiert nach {filename}")
-
-    def _export_libreoffice(self):
-        """Export to LibreOffice format."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        import subprocess
-        import tempfile
-        import os
-
-        singers = self.singer_repo.get_all()
-
-        reply = QMessageBox.question(
-            self,
-            "LibreOffice Export",
-            "Möchten Sie als Writer-Dokument (doc) oder Calc-Dokument (xls) exportieren?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            output_format = "doc"
-            ext = ".doc"
-        else:
-            output_format = "xls"
-            ext = ".xls"
-
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".csv", delete=False, encoding="utf-8"
-        ) as f:
-            import csv
-
-            writer = csv.writer(f)
-            writer.writerow(["Name", "Stimmgruppe", "E-Mail", "Telefon", "Adresse"])
-            for singer in singers:
-                writer.writerow(
-                    [
-                        singer.full_name or "",
-                        singer.voice_group or "",
-                        singer.email or "",
-                        singer.phone or "",
-                        singer.address or "",
-                    ]
-                )
-            temp_csv = f.name
-
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Als LibreOffice exportieren", "", f"LibreOffice Dateien (*{ext})"
-        )
-
-        if not filename:
-            return
-
-        out_dir = os.path.dirname(filename)
-        result = subprocess.run(
-            [
-                "libreoffice",
-                "--headless",
-                "--convert-to",
-                output_format,
-                "--outdir",
-                out_dir,
-                temp_csv,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        if result.returncode == 0:
-            base_name = os.path.splitext(os.path.basename(temp_csv))[0]
-            expected_output = os.path.join(out_dir, base_name + ext)
-            if expected_output != filename and os.path.exists(expected_output):
-                os.rename(expected_output, filename)
-            self.statusBar().showMessage(f"Exportiert nach {filename}")
-        else:
-            QMessageBox.warning(self, "Fehler", f"LibreOffice Fehler:\n{result.stderr}")
-
-        if os.path.exists(temp_csv):
-            os.unlink(temp_csv)
-
     def _set_light_theme(self):
         """Set professional light theme."""
-        light_style = """
-        /* ===== LIGHT THEME ===== */
-
-        /* Main application colors */
-        QMainWindow, QWidget {
-            background-color: #f8f9fa;
-            color: #212529;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-
-        /* Table styling */
-        QTableWidget {
-            background-color: #ffffff;
-            alternate-background-color: #f8f9fa;
-            gridline-color: #dee2e6;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-        }
-
-        QTableWidget::item {
-            padding: 12px 8px;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        QTableWidget::item:selected {
-            background-color: #e3f2fd;
-            color: #1976d2;
-        }
-
-        QHeaderView::section {
-            padding: 10px;
-            background-color: #f1f3f4;
-            border: none;
-            border-bottom: 2px solid #1976d2;
-            font-weight: bold;
-        }
-
-        QHeaderView::section {
-            background-color: #f8f9fa;
-            color: #495057;
-            padding: 12px 8px;
-            border: 1px solid #dee2e6;
-            border-left: none;
-            font-weight: 600;
-            font-size: 13px;
-        }
-
-        QHeaderView::section:vertical {
-            padding: 8px 16px;
-        }
-        
-        /* Button styling */
-        QPushButton {
-            background-color: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            padding: 8px 16px;
-            color: #495057;
-            font-weight: 500;
-        }
-
-        QPushButton:hover {
-            background-color: #e9ecef;
-            border-color: #adb5bd;
-        }
-
-        QPushButton:pressed {
-            background-color: #dee2e6;
-        }
-
-        /* Menu styling */
-        QMenuBar {
-            background-color: #ffffff;
-            border-bottom: 1px solid #dee2e6;
-            color: #495057;
-        }
-
-        QMenuBar::item {
-            padding: 8px 12px;
-            background-color: transparent;
-        }
-
-        QMenuBar::item:selected {
-            background-color: #e9ecef;
-        }
-
-        QMenu {
-            background-color: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            color: #495057;
-        }
-
-        QMenu::item {
-            padding: 8px 20px;
-            border-radius: 2px;
-        }
-
-        QMenu::item:selected {
-            background-color: #e3f2fd;
-            color: #1976d2;
-        }
-
-        /* Status bar */
-        QStatusBar {
-            background-color: #f8f9fa;
-            border-top: 1px solid #dee2e6;
-            color: #6c757d;
-        }
-
-        /* Tool bar */
-        QToolBar {
-            background-color: #f8f9fa;
-            border: none;
-            border-bottom: 1px solid #dee2e6;
-        }
-
-        /* Info labels - custom colors maintained */
-        QLabel#projectInfoLabel {
-            background-color: #4a90d9;
-            color: #ffffff;
-            padding: 10px 15px;
-            font-weight: bold;
-            font-size: 13px;
-            border-radius: 4px;
-        }
-
-        QLabel#eventInfoLabel {
-            background-color: #e67e22;
-            color: #ffffff;
-            padding: 10px 15px;
-            font-weight: bold;
-            font-size: 13px;
-            border-radius: 4px;
-        }
-
-        /* Form controls */
-        QLineEdit, QComboBox, QTextEdit {
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            padding: 8px 12px;
-            background-color: #ffffff;
-            color: #495057;
-        }
-
-        QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
-            border-color: #4a90d9;
-            outline: none;
-        }
-
-        /* Scroll bars */
-        QScrollBar:vertical {
-            background-color: #f8f9fa;
-            width: 12px;
-            border-radius: 6px;
-        }
-
-        QScrollBar::handle:vertical {
-            background-color: #adb5bd;
-            border-radius: 6px;
-            min-height: 20px;
-        }
-
-        QScrollBar::handle:vertical:hover {
-            background-color: #6c757d;
-        }
-
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            border: none;
-            background: none;
-        }
-        QLabel#pageTitle {
-            font-size: 22px;
-            font-weight: bold;
-            color: #2c3e50;
-            padding: 14px 15px 10px 15px;
-            background-color: #f8f9fa;
-            border-bottom: 2px solid #dee2e6;
-        }
-        """
-        self.setStyleSheet(light_style)
+        from pathlib import Path
+        theme_file = Path(__file__).parent / "themes" / "light.qss"
+        self.setStyleSheet(theme_file.read_text())
         set_theme("light")
         self.statusBar().showMessage("Helles Theme aktiviert")
 
     def _set_dark_theme(self):
         """Set professional dark theme."""
-        dark_style = """
-        /* ===== DARK THEME ===== */
-        
-        /* Info bar - augenfreundlich im Dark Mode */
-        QWidget#infoBarWidget {
-            background-color: #1e2832;
-            border-bottom: 2px solid #4a90d9;
-            padding: 8px;
-        }
-        QLabel {
-            color: #e0e0e0;
-            font-weight: bold;
-            padding: 4px 12px;
-            border-radius: 4px;
-        }
-        QLabel#projectInfoLabel {
-            background-color: #1565c0;
-            color: white;
-        }
-        QLabel#eventInfoLabel {
-            background-color: #e65100;
-            color: white;
-        }
-        QLabel#pageTitle {
-            background-color: #2d2d2d;
-            color: #ffffff;
-            font-size: 22px;
-            font-weight: bold;
-            padding: 14px 15px 10px 15px;
-            border-bottom: 2px solid #404040;
-        }
-
-        /* Main application colors */
-        QMainWindow, QWidget {
-            background-color: #1a1a1a;
-            color: #e0e0e0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-
-        /* Table styling */
-        QTableWidget {
-            background-color: #2d2d2d;
-            alternate-background-color: #262626;
-            gridline-color: #404040;
-            border: 1px solid #404040;
-            border-radius: 4px;
-        }
-
-        QTableWidget::item {
-            padding: 6px 8px;
-            border-bottom: 1px solid #333333;
-            color: #e0e0e0;
-        }
-
-        QTableWidget::item:selected {
-            background-color: #1e3a5f;
-            color: #64b5f6;
-        }
-
-        QHeaderView::section {
-            background-color: #333333;
-            color: #ffffff;
-            padding: 12px 8px;
-            border: 1px solid #404040;
-            border-left: none;
-            font-weight: 600;
-            font-size: 13px;
-        }
-
-        QHeaderView::section:vertical {
-            padding: 8px 16px;
-        }
-        
-        /* Button styling */
-        QPushButton {
-            background-color: #333333;
-            border: 1px solid #555555;
-            border-radius: 6px;
-            padding: 8px 16px;
-            color: #e0e0e0;
-            font-weight: 500;
-        }
-
-        QPushButton:hover {
-            background-color: #404040;
-            border-color: #666666;
-        }
-
-        QPushButton:pressed {
-            background-color: #262626;
-        }
-
-        /* Checkbox styling for dark theme */
-        QCheckBox {
-            background-color: transparent;
-            color: #e0e0e0;
-            padding: 4px;
-        }
-        QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
-            border: 1px solid #666666;
-            border-radius: 3px;
-            background-color: #2d2d2d;
-        }
-        QCheckBox::indicator:checked {
-            background-color: #1565c0;
-            border-color: #1976d2;
-        }
-        QCheckBox::indicator:indeterminate {
-            background-color: #4a4a4a;
-        }
-
-        /* Menu styling */
-        QMenuBar {
-            background-color: #2d2d2d;
-            border-bottom: 1px solid #404040;
-            color: #e0e0e0;
-        }
-
-        QMenuBar::item {
-            padding: 8px 12px;
-            background-color: transparent;
-        }
-
-        QMenuBar::item:selected {
-            background-color: #404040;
-        }
-
-        QMenu {
-            background-color: #333333;
-            border: 1px solid #555555;
-            border-radius: 4px;
-            color: #e0e0e0;
-        }
-
-        QMenu::item {
-            padding: 8px 20px;
-            border-radius: 2px;
-        }
-
-        QMenu::item:selected {
-            background-color: #1e3a5f;
-            color: #64b5f6;
-        }
-
-        /* Status bar */
-        QStatusBar {
-            background-color: #1a1a1a;
-            border-top: 1px solid #404040;
-            color: #b0b0b0;
-        }
-
-        /* Tool bar */
-        QToolBar {
-            background-color: #2d2d2d;
-            border: none;
-            border-bottom: 1px solid #404040;
-            color: #e0e0e0;
-        }
-
-        /* Info labels - custom colors maintained */
-        QLabel#projectInfoLabel {
-            background-color: #4a90d9;
-            color: #ffffff;
-            padding: 10px 15px;
-            font-weight: bold;
-            font-size: 13px;
-            border-radius: 4px;
-        }
-
-        QLabel#eventInfoLabel {
-            background-color: #e67e22;
-            color: #ffffff;
-            padding: 10px 15px;
-            font-weight: bold;
-            font-size: 13px;
-            border-radius: 4px;
-        }
-
-        /* Form controls */
-        QLineEdit, QComboBox, QTextEdit {
-            border: 1px solid #555555;
-            border-radius: 4px;
-            padding: 8px 12px;
-            background-color: #333333;
-            color: #e0e0e0;
-        }
-
-        QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
-            border-color: #4a90d9;
-            outline: none;
-        }
-
-        /* Scroll bars */
-        QScrollBar:vertical {
-            background-color: #1a1a1a;
-            width: 12px;
-            border-radius: 6px;
-        }
-
-        QScrollBar::handle:vertical {
-            background-color: #555555;
-            border-radius: 6px;
-            min-height: 20px;
-        }
-
-        QScrollBar::handle:vertical:hover {
-            background-color: #666666;
-        }
-
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            border: none;
-            background: none;
-        }
-
-        /* Additional dark theme refinements */
-        QSplitter::handle {
-            background-color: #404040;
-        }
-
-        QSplitter::handle:hover {
-            background-color: #555555;
-        }
-        QLabel#pageTitle {
-            font-size: 22px;
-            font-weight: bold;
-            color: #ffffff;
-            padding: 14px 15px 10px 15px;
-            background-color: #2d2d2d;
-            border-bottom: 2px solid #404040;
-        }
-        """
-        self.setStyleSheet(dark_style)
+        from pathlib import Path
+        theme_file = Path(__file__).parent / "themes" / "dark.qss"
+        self.setStyleSheet(theme_file.read_text())
         set_theme("dark")
         self.statusBar().showMessage("Dunkles Theme aktiviert")
 
@@ -2117,108 +1481,6 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Termine", event_text)
 
-    def _export_singers_json(self):
-        """Export singers as JSON for choraufstellung sync."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from ..export.sync import export_singers_json
-
-        default_path = (
-            self.db_path.replace(".db", "_singers.json")
-            if self.db_path
-            else "singers.json"
-        )
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Sänger exportieren", default_path, "JSON Dateien (*.json)"
-        )
-
-        if filename:
-            from pathlib import Path
-
-            output_path = Path(filename)
-            try:
-                export_singers_json(self.db, output_path)
-                self.statusBar().showMessage(f"Sänger exportiert nach {filename}")
-                QMessageBox.information(self, "Export", f"Exportiert nach:\n{filename}")
-            except Exception as e:
-                QMessageBox.warning(self, "Fehler", f"Export fehlgeschlagen:\n{str(e)}")
-
-    def _export_events_json(self):
-        """Export events as JSON for choraufstellung sync."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from ..export.sync import export_events_json
-
-        default_path = (
-            self.db_path.replace(".db", "_termine.json")
-            if self.db_path
-            else "termine.json"
-        )
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Termine exportieren", default_path, "JSON Dateien (*.json)"
-        )
-
-        if filename:
-            from pathlib import Path
-
-            output_path = Path(filename)
-            try:
-                export_events_json(self.db, output_path)
-                self.statusBar().showMessage(f"Termine exportiert nach {filename}")
-                QMessageBox.information(self, "Export", f"Exportiert nach:\n{filename}")
-            except Exception as e:
-                QMessageBox.warning(self, "Fehler", f"Export fehlgeschlagen:\n{str(e)}")
-
-    def _export_availability_json(self):
-        """Export availability matrix as JSON."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from ..export.sync import export_availability_json
-
-        default_path = (
-            self.db_path.replace(".db", "_verfuegbarkeit.json")
-            if self.db_path
-            else "verfuegbarkeit.json"
-        )
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Verfügbarkeit exportieren", default_path, "JSON Dateien (*.json)"
-        )
-
-        if filename:
-            from pathlib import Path
-
-            output_path = Path(filename)
-            try:
-                export_availability_json(self.db, output_path)
-                self.statusBar().showMessage(
-                    f"Verfügbarkeit exportiert nach {filename}"
-                )
-                QMessageBox.information(self, "Export", f"Exportiert nach:\n{filename}")
-            except Exception as e:
-                QMessageBox.warning(self, "Fehler", f"Export fehlgeschlagen:\n{str(e)}")
-
-    def _export_singers_csv(self):
-        """Export singers as CSV fallback for choraufstellung."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from ..export.sync import export_singers_csv
-
-        default_path = (
-            self.db_path.replace(".db", "_singers.csv")
-            if self.db_path
-            else "singers.csv"
-        )
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "CSV exportieren", default_path, "CSV Dateien (*.csv)"
-        )
-
-        if filename:
-            from pathlib import Path
-
-            output_path = Path(filename)
-            try:
-                export_singers_csv(self.db, output_path)
-                self.statusBar().showMessage(f"CSV exportiert nach {filename}")
-                QMessageBox.information(self, "Export", f"Exportiert nach:\n{filename}")
-            except Exception as e:
-                QMessageBox.warning(self, "Fehler", f"Export fehlgeschlagen:\n{str(e)}")
-
     def _export_all_sync(self):
         """Export all sync files to default location."""
         from PyQt6.QtWidgets import QMessageBox
@@ -2266,7 +1528,7 @@ class MainWindow(QMainWindow):
 
     def _open_projekt(self):
         """Open existing project."""
-        self.tabs.setCurrentIndex(0)
+        self.content_stack.setCurrentIndex(0)
         QMessageBox.information(
             self, "Öffnen", "Bitte wählen Sie ein Projekt aus der Liste aus."
         )
@@ -2285,14 +1547,16 @@ class MainWindow(QMainWindow):
         from datetime import datetime
 
         try:
+            from ..config import get_app_dir
+            app_dir = str(get_app_dir())
             git_hash = subprocess.check_output(
                 ["git", "describe", "--tags", "--abbrev=7", "--always", "--dirty"],
-                cwd="/media/data/coding/chormanager",
+                cwd=app_dir,
                 text=True,
             ).strip()
             commit_date = subprocess.check_output(
                 ["git", "log", "-1", "--format=%cd", "--date=short"],
-                cwd="/media/data/coding/chormanager",
+                cwd=app_dir,
                 text=True,
             ).strip()
         except Exception:
@@ -2399,12 +1663,12 @@ class MainWindow(QMainWindow):
 
     def _open_backup_restore(self):
         """Open Backup & Restore dialog."""
-        from ..export.backup_service import BackupService
+        from ..export.backup_service import ApplicationBackupService
         from ..ui.dialogs import BackupRestoreDialog
         from pathlib import Path
 
         app_root = Path(__file__).parent.parent.parent
-        service = BackupService(app_root)
+        service = ApplicationBackupService(app_root)
 
         dialog = BackupRestoreDialog(self)
         dialog.service = service
@@ -2535,11 +1799,13 @@ class MainWindow(QMainWindow):
             content = service.export_to_csv(data, selected_fields)
             ext_filter = 'CSV (*.csv)'
 
+        from datetime import datetime
         tab_name_map = {'Projekte': 'projekte', 'Sänger': 'saenger', 'Besetzungen': 'besetzungen', 'Termine': 'termine'}
         ext_map = {'writer': 'odt', 'calc': 'ods', 'csv': 'csv'}
         tab_file = tab_name_map.get(display_name, display_name.lower())
         ext = ext_map.get(fmt, 'csv')
-        default_name = f'2026-04-26-{tab_file}.{ext}'
+        today = datetime.now().strftime('%Y-%m-%d')
+        default_name = f'{today}-{tab_file}.{ext}'
         workdir = Path(__file__).parent.parent.parent / 'workdir'
         workdir.mkdir(exist_ok=True)
         default_path = str(workdir / default_name)
@@ -2884,9 +2150,10 @@ class VersionCheckDialog(QDialog):
                 remote_sha = data['commit']['sha'].strip()[:7]
                 
                 # Get current local commit
+                from ..config import get_app_dir
                 result = subprocess.run(
                     ['git', 'rev-parse', 'HEAD'],
-                    capture_output=True, text=True, cwd='/media/data/coding/chormanager'
+                    capture_output=True, text=True, cwd=str(get_app_dir())
                 )
                 local_sha = result.stdout.strip()[:7]
                 
@@ -2910,9 +2177,10 @@ class VersionCheckDialog(QDialog):
         
         try:
             import subprocess
+            from ..config import get_app_dir
             result = subprocess.run(
                 ['git', 'pull', 'origin', '0.4'],
-                capture_output=True, text=True, cwd='/media/data/coding/chormanager'
+                capture_output=True, text=True, cwd=str(get_app_dir())
             )
             
             if result.returncode == 0:

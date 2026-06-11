@@ -132,7 +132,6 @@ class SingerRepository:
             f"UPDATE singers SET {set_clause} WHERE id = ?",
             tuple(kwargs.values()) + (singer_id,),
         )
-        self.db.commit()
 
         # Handle bidirectional affinity synchronization
         if "affinity_uuid" in kwargs:
@@ -543,13 +542,6 @@ class BesetzungRepository:
         self.db.commit()
 
         return result.rowcount > 0
-
-    def set_active(self, project_id: str) -> None:
-        """Set active besetzung for a project (most recent)."""
-        self.db.execute(
-            "UPDATE besetzung SET is_active = 1 WHERE project_id = ?", (project_id,)
-        )
-        self.db.commit()
 
 
 class RepertoireRepository:

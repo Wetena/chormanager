@@ -197,30 +197,13 @@ class Project:
 
             self.id = str(uuid.uuid4())
 
-    def __post_init__(self):
-        """Set timestamps if not set."""
-        now = datetime.now().isoformat()
-        if not self.created_at:
-            self.created_at = now
-        if not self.updated_at:
-            self.updated_at = now
-
-    @property
-    def is_past(self) -> bool:
-        """Check if event is in the past."""
-        try:
-            event_date = datetime.fromisoformat(self.date)
-            return event_date < datetime.now()
-        except (ValueError, TypeError):
-            return False
-
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Event":
-        """Create Event from dictionary."""
+    def from_dict(cls, data: dict) -> "Project":
+        """Create Project from dictionary."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 

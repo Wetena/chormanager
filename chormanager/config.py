@@ -130,18 +130,39 @@ def get_data_dir() -> Path:
     return get_app_dir() / "data"
 
 
+@lru_cache(maxsize=1)
+def _load_voice_groups_raw():
+    """Load raw voice groups from YAML."""
+    config_file = CONFIG_DIR / "voice_groups.yaml"
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (FileNotFoundError, yaml.YAMLError):
+        return []
+    groups = data.get("voice_groups", []) if data else []
+    return sorted(groups, key=lambda g: g.get("order", 0))
+
+
 def load_voice_groups():
     """Load voice groups from YAML configuration.
     
     Returns:
         list: List of voice group dictionaries sorted by order.
     """
-    config_file = CONFIG_DIR / "voice_groups.yaml"
-    with open(config_file, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    
-    groups = data.get("voice_groups", [])
-    return sorted(groups, key=lambda g: g.get("order", 0))
+    return _load_voice_groups_raw()
+
+
+@lru_cache(maxsize=1)
+def _load_fields_raw():
+    """Load raw field definitions from YAML."""
+    config_file = CONFIG_DIR / "fields.yaml"
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (FileNotFoundError, yaml.YAMLError):
+        return []
+    fields = data.get("fields", []) if data else []
+    return sorted(fields, key=lambda f: f.get("order", 0))
 
 
 def load_fields():
@@ -150,12 +171,28 @@ def load_fields():
     Returns:
         list: List of field dictionaries sorted by order.
     """
-    config_file = CONFIG_DIR / "fields.yaml"
-    with open(config_file, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    return _load_fields_raw()
+
+
+@lru_cache(maxsize=1)
+def _load_app_config_raw():
+    """Load raw application configuration from YAML."""
+    config_file = CONFIG_DIR / "app.yaml"
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        config = {}
     
-    fields = data.get("fields", [])
-    return sorted(fields, key=lambda f: f.get("order", 0))
+    config.setdefault("database", {}).setdefault("filename", "chor.db")
+    config.setdefault("backup", {}).setdefault("enabled", True)
+    config.setdefault("backup", {}).setdefault("on_start", True)
+    config.setdefault("backup", {}).setdefault("before_save", True)
+    config.setdefault("backup", {}).setdefault("max_backups", 10)
+    config.setdefault("logging", {}).setdefault("enabled", True)
+    config.setdefault("logging", {}).setdefault("level", "INFO")
+    
+    return config
 
 
 def load_app_config():
@@ -164,9 +201,16 @@ def load_app_config():
     Returns:
         dict: Application configuration dictionary.
     """
-    config_file = CONFIG_DIR / "app.yaml"
-    with open(config_file, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return _load_app_config_raw()
+
+
+def reload_config():
+    """Clear config cache and reload from disk."""
+    _load_voice_groups_raw.cache_clear()
+    _load_fields_raw.cache_clear()
+    _load_app_config_raw.cache_clear()
+    
+    return config
 
 
 def get_voice_group_choices():

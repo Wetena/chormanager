@@ -18,7 +18,7 @@ class BackupFile:
         return f'<BackupFile {self.archive_name} mtime={self.mtime}>'
 
 
-class BackupService:
+class ApplicationBackupService:
     # Dateien, die ins Backup gehören (Pfade relativ zum App-Root)
     BACKUP_FILES = [
         'data/chor.db',
