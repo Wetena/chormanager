@@ -2,15 +2,6 @@ import sys
 import os
 import json
 
-try:
-    from qt_compat import exec_qt
-except ImportError:
-    def exec_qt(obj, action=None):
-        if action is None:
-            return obj.exec_()
-        else:
-            return obj.exec_(action)
-
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
@@ -23,23 +14,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QDrag, QColor, QPalette, QFont, QAction, QUndoStack, QUndoCommand, QActionGroup
-
-QFrame.Panel = QFrame.Shape.Panel
-QFrame.Raised = QFrame.Shadow.Raised
-QFrame.Sunken = QFrame.Shadow.Sunken
-QFrame.HLine = QFrame.Shape.HLine
-QFrame.VLine = QFrame.Shape.VLine
-QFrame.StyledPanel = QFrame.Shape.StyledPanel
-QFrame.NoFrame = QFrame.Shape.NoFrame
-
-Qt.Horizontal = Qt.Orientation.Horizontal
-Qt.Vertical = Qt.Orientation.Vertical
-Qt.AlignCenter = Qt.AlignmentFlag.AlignCenter
-Qt.AlignRight = Qt.AlignmentFlag.AlignRight
-Qt.AlignTop = Qt.AlignmentFlag.AlignTop
-Qt.LeftButton = Qt.MouseButton.LeftButton
-Qt.RightButton = Qt.MouseButton.RightButton
-Qt.ControlModifier = Qt.KeyboardModifier.ControlModifier
 
 try:
     from config import load_settings, save_settings, load_voice_groups_config, get_valid_voice_groups, get_voice_group_color, get_data_dir, clear_color_cache
@@ -116,22 +90,22 @@ class SingerTile(QFrame):
         self.position = None
         self._selected = False
         self.setFixedSize(120, 60)
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setFrameShadow(QFrame.Raised)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QFrame.Shadow.Raised)
         self._bg = voice_group_color(singer.voice_group)
         self.setStyleSheet(f"background-color: {self._bg}; border: 1px solid #888; border-radius: 4px;")
         self.setAutoFillBackground(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         lay = QVBoxLayout(self); lay.setContentsMargins(4,2,4,2); lay.setSpacing(0)
-        n = QLabel(f"<b>{singer.name}</b>"); n.setAlignment(Qt.AlignCenter); n.setWordWrap(True)
+        n = QLabel(f"<b>{singer.name}</b>"); n.setAlignment(Qt.AlignmentFlag.AlignCenter); n.setWordWrap(True)
         n.setStyleSheet("background: transparent; color: #000; font-size: 9pt;"); lay.addWidget(n)
         vg = singer.voice_group.value if hasattr(singer.voice_group, 'value') else str(singer.voice_group)
-        v = QLabel(vg); v.setAlignment(Qt.AlignCenter); v.setStyleSheet("background: transparent; color: #333; font-size: 8pt;"); lay.addWidget(v)
+        v = QLabel(vg); v.setAlignment(Qt.AlignmentFlag.AlignCenter); v.setStyleSheet("background: transparent; color: #333; font-size: 8pt;"); lay.addWidget(v)
         if singer.height > 0:
-            h = QLabel(f"{singer.height} cm"); h.setAlignment(Qt.AlignCenter); h.setStyleSheet("background: transparent; color: #555; font-size: 7pt;"); lay.addWidget(h)
+            h = QLabel(f"{singer.height} cm"); h.setAlignment(Qt.AlignmentFlag.AlignCenter); h.setStyleSheet("background: transparent; color: #555; font-size: 7pt;"); lay.addWidget(h)
         btn = QPushButton("×"); btn.setFixedSize(14,14); btn.setStyleSheet("font-size: 10pt; padding: 0; background: transparent; border: none;")
-        btn.clicked.connect(self.on_remove); lay.addWidget(btn, alignment=Qt.AlignRight | Qt.AlignTop)
+        btn.clicked.connect(self.on_remove); lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(8)
@@ -166,14 +140,14 @@ class SingerTile(QFrame):
             )
         self.style().polish(self)
     def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             self._drag_start_pos = e.globalPosition()
             modifiers = QApplication.keyboardModifiers()
             parent_grid = self.parent()
             
             if isinstance(parent_grid, FormationGrid):
                 sid = self.singer.singer_id
-                if modifiers & Qt.ControlModifier:
+                if modifiers & Qt.KeyboardModifier.ControlModifier:
                     if sid in parent_grid.selected_ids:
                         parent_grid.selected_ids.remove(sid)
                     else:
@@ -431,7 +405,7 @@ class FormationGrid(QWidget):
                 self._restore_tile_style(tile)
     
     def mousePressEvent(self, e):
-        if e.button() != Qt.LeftButton:
+        if e.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(e)
 
         widget = self.childAt(e.pos())
@@ -439,7 +413,7 @@ class FormationGrid(QWidget):
             sid = widget.singer.singer_id
             modifiers = QApplication.keyboardModifiers()
 
-            if modifiers & Qt.ControlModifier:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
                 if sid in self.selected_ids:
                     self.selected_ids.discard(sid)
                 else:
@@ -561,8 +535,8 @@ class FormationGrid(QWidget):
                     x += self.OFFSET
                 y = self.MARGIN_TOP + r * self.CELL_HEIGHT
                 cell.setGeometry(x, y, self.CELL_WIDTH - 5, self.CELL_HEIGHT - 5)
-                cell.setFrameShape(QFrame.Panel)
-                cell.setFrameShadow(QFrame.Sunken)
+                cell.setFrameShape(QFrame.Shape.Panel)
+                cell.setFrameShadow(QFrame.Shadow.Sunken)
                 cell.setStyleSheet("""
                     background-color: rgba(255,255,255, 0.65);
                     border: 1px solid #d4c9b8;
@@ -1207,7 +1181,7 @@ class MainWindow(QMainWindow):
             self.actionLight.setChecked(True)
 
     def setup_ui(self):
-        cen=QWidget(); self.setCentralWidget(cen); ml=QHBoxLayout(cen); sp=QSplitter(Qt.Horizontal)
+        cen=QWidget(); self.setCentralWidget(cen); ml=QHBoxLayout(cen); sp=QSplitter(Qt.Orientation.Horizontal)
         lp=QWidget(); ll=QVBoxLayout(lp); self.pool=SingerPool()
         self.pool.singer_selected.connect(self.add_to_grid); self.pool.singer_added.connect(self.add_to_grid)
         self.pool.singer_edit_requested.connect(self.edit_singer)

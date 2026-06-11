@@ -18,7 +18,6 @@ except ImportError:
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtGui import QColor, QFont, QPalette
 
-from qt_compat import exec_qt
 from singer_model import VoiceGroup, Singer, voice_group_color
 from core.commands import UndoCommand
 

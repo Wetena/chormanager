@@ -1,5 +1,6 @@
 # UI: Grid widget components - SingerTile and FormationGrid
 # Extracted from main.py for better separation of concerns
+import sys
 try:
     from PyQt6.QtWidgets import (
         QFrame, QLabel, QPushButton, QVBoxLayout, QMenu, QMessageBox,
@@ -15,8 +16,20 @@ except ImportError:
     from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer
     from PyQt5.QtGui import QDrag, QColor, QFont
 
-from qt_compat import exec_qt
 from singer_model import voice_group_color
+
+# Compatibility: create PyQt6-style enum attributes when running under PyQt5
+if 'PyQt5' in sys.modules:
+    QFrame.Shape.Panel = QFrame.Panel
+    QFrame.Shape.StyledPanel = QFrame.StyledPanel
+    QFrame.Shadow.Raised = QFrame.Raised
+    QFrame.Shadow.Sunken = QFrame.Sunken
+    Qt.AlignmentFlag.AlignCenter = Qt.AlignCenter
+    Qt.AlignmentFlag.AlignRight = Qt.AlignRight
+    Qt.AlignmentFlag.AlignTop = Qt.AlignTop
+    Qt.AlignmentFlag.AlignLeft = Qt.AlignLeft
+    Qt.MouseButton.LeftButton = Qt.LeftButton
+    Qt.KeyboardModifier.ControlModifier = Qt.ControlModifier
 
 
 def get_text_color() -> str:
@@ -59,7 +72,7 @@ class SingerTile(QFrame):
         self.position = None
         self._selected = False
         self.setFixedSize(120, 60)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setFrameShadow(QFrame.Raised)
         self._bg = voice_group_color(singer.voice_group)
         self.setStyleSheet(f"background-color: {self._bg}; border: 1px solid #888; border-radius: 4px;")
@@ -79,20 +92,20 @@ class SingerTile(QFrame):
         
         name_with_affinity = f"{self.singer.name} 👥" if self.singer.affinity else self.singer.name
         n = QLabel(f"<b>{name_with_affinity}</b>")
-        n.setAlignment(Qt.AlignCenter)
+        n.setAlignment(Qt.AlignmentFlag.AlignCenter)
         n.setWordWrap(True)
         n.setStyleSheet(f"background: transparent; color: {txt_color}; font-size: 9pt;")
         lay.addWidget(n)
         
         vg = self.singer.voice_group.value if hasattr(self.singer.voice_group, 'value') else str(self.singer.voice_group)
         v = QLabel(vg)
-        v.setAlignment(Qt.AlignCenter)
+        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.setStyleSheet(f"background: transparent; color: {sec_color}; font-size: 8pt;")
         lay.addWidget(v)
         
         if self.singer.height > 0:
             h = QLabel(f"{self.singer.height} cm")
-            h.setAlignment(Qt.AlignCenter)
+            h.setAlignment(Qt.AlignmentFlag.AlignCenter)
             h.setStyleSheet(f"background: transparent; color: {sec_color}; font-size: 7pt;")
             lay.addWidget(h)
         
@@ -100,7 +113,7 @@ class SingerTile(QFrame):
         btn.setFixedSize(14, 14)
         btn.setStyleSheet("font-size: 10pt; padding: 0; background: transparent; border: none;")
         btn.clicked.connect(self.on_remove)
-        lay.addWidget(btn, alignment=Qt.AlignRight | Qt.AlignTop)
+        lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
     
     def _setup_shadow(self):
         shadow = QGraphicsDropShadowEffect(self)
@@ -143,10 +156,10 @@ class SingerTile(QFrame):
         self.style().polish(self)
     
     def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             from PyQt6.QtWidgets import QApplication
             modifiers = QApplication.keyboardModifiers()
-            if modifiers & Qt.ControlModifier:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
                 e.ignore()
                 return
 
@@ -158,7 +171,7 @@ class SingerTile(QFrame):
             self._drag_start_pos = e.globalPos()
     
     def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.LeftButton and hasattr(self, '_drag_start_pos'):
+        if e.buttons() & Qt.MouseButton.LeftButton and hasattr(self, '_drag_start_pos'):
             from PyQt6.QtWidgets import QApplication
             if (e.globalPos() - self._drag_start_pos).manhattanLength() > QApplication.startDragDistance():
                 drag = QDrag(self)
@@ -300,7 +313,7 @@ class FormationGrid(QWidget):
                 self._restore_tile_style(tile)
     
     def mousePressEvent(self, e):
-        if e.button() != Qt.LeftButton:
+        if e.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(e)
 
         widget = self.childAt(e.pos())
@@ -309,7 +322,7 @@ class FormationGrid(QWidget):
             from PyQt6.QtWidgets import QApplication
             modifiers = QApplication.keyboardModifiers()
 
-            if modifiers & Qt.ControlModifier:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
                 if sid in self.selected_ids:
                     self.selected_ids.discard(sid)
                 else:
@@ -382,8 +395,8 @@ class FormationGrid(QWidget):
                     x += self.OFFSET
                 y = self.MARGIN_TOP + r * self.CELL_HEIGHT
                 cell.setGeometry(x, y, self.CELL_WIDTH - 5, self.CELL_HEIGHT - 5)
-                cell.setFrameShape(QFrame.Panel)
-                cell.setFrameShadow(QFrame.Sunken)
+                cell.setFrameShape(QFrame.Shape.Panel)
+                cell.setFrameShadow(QFrame.Shadow.Sunken)
                 cell.setStyleSheet("""
                     background-color: rgba(255,255,255, 0.65);
                     border: 1px solid #d4c9b8;
