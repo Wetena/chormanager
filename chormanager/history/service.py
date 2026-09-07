@@ -99,3 +99,96 @@ class HistoryService:
     def __len__(self) -> int:
         """Get number of commands in history."""
         return len(self._undo_stack)
+
+
+class CreateSingerCommand:
+    """Command for creating a singer."""
+    
+    def __init__(self, repository, singer_data: dict):
+        """Initialize command.
+        
+        Args:
+            repository: SingerRepository instance.
+            singer_data: Singer data dictionary.
+        """
+        self._repository = repository
+        self._singer_data = singer_data
+        self._created_singer = None
+    
+    def execute(self) -> None:
+        """Execute the command."""
+        self._created_singer = self._repository.create(**self._singer_data)
+    
+    def undo(self) -> None:
+        """Undo the command."""
+        if self._created_singer:
+            self._repository.delete(self._created_singer.id)
+    
+    def redo(self) -> None:
+        """Redo the command."""
+        if self._created_singer:
+            self._created_singer = self._repository.create(**self._singer_data)
+
+
+class UpdateSingerCommand:
+    """Command for updating a singer."""
+    
+    def __init__(self, repository, singer_id: str, updates: dict):
+        """Initialize command.
+        
+        Args:
+            repository: SingerRepository instance.
+            singer_id: Singer ID.
+            updates: Updates dictionary.
+        """
+        self._repository = repository
+        self._singer_id = singer_id
+        self._updates = updates
+        self._old_data = None
+    
+    def execute(self) -> None:
+        """Execute the command."""
+        self._old_data = self._repository.get_by_id(self._singer_id)
+        if self._old_data:
+            self._old_data = self._old_data.to_dict()
+        self._repository.update(self._singer_id, **self._updates)
+    
+    def undo(self) -> None:
+        """Undo the command."""
+        if self._old_data:
+            self._repository.update(self._singer_id, **self._old_data)
+    
+    def redo(self) -> None:
+        """Redo the command."""
+        self._repository.update(self._singer_id, **self._updates)
+
+
+class DeleteSingerCommand:
+    """Command for deleting a singer."""
+    
+    def __init__(self, repository, singer_id: str):
+        """Initialize command.
+        
+        Args:
+            repository: SingerRepository instance.
+            singer_id: Singer ID.
+        """
+        self._repository = repository
+        self._singer_id = singer_id
+        self._deleted_singer = None
+    
+    def execute(self) -> None:
+        """Execute the command."""
+        self._deleted_singer = self._repository.get_by_id(self._singer_id)
+        if self._deleted_singer:
+            self._deleted_singer = self._deleted_singer.to_dict()
+        self._repository.delete(self._singer_id)
+    
+    def undo(self) -> None:
+        """Undo the command."""
+        if self._deleted_singer:
+            self._deleted_singer = self._repository.create(**self._deleted_singer)
+    
+    def redo(self) -> None:
+        """Redo the command."""
+        self._repository.delete(self._singer_id)

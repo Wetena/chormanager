@@ -1,4 +1,32 @@
-"""Main window for ChorManager."""
+"""Main window for ChorManager.
+
+Architecture note (A1-SUBPLAN-A, Sprint 4.5):
+-------------------------------------------------
+The :class:`MainWindow` class is currently 924 LOC. It mixes UI shell
+code with behaviour contributed by 4 mixins:
+
+* :class:`TabRouterMixin` (``chormanager.ui.tab_router``) — tab-routing
+* :class:`ChorAufstellungLauncherMixin` (``chormanager.ui.choraufstellung_launcher``)
+* :class:`ExportCoreMixin`, ``ExportJsonSyncMixin``, ``ExportTabSpecificMixin``
+  (``chormanager.ui.export_controller``) — export
+* :class:`VersionCheckDialog` (``chormanager.ui.update_controller``) — updates
+
+A1-SUBPLAN-A migrates these mixins to **composition** (``QObject``
+controllers owned by MainWindow). Sprint 4.4 introduced the first
+piece — :class:`chormanager.ui.tab_signals.TabSignals` — without
+breaking the mixin. Future sprints continue the migration:
+
+* Sprint 4.x: replace ``ChorAufstellungLauncherMixin`` with
+  :class:`ChorAufstellungTab` (composition).
+* Sprint 4.x: split ``export_controller.py`` (3 mixins, 883 LOC)
+  into ``ExportController(QObject)`` and per-format sub-controllers.
+* Sprint 4.x: collapse ``UpdateController`` into a non-mixin
+  :class:`UpdateWorker(QObject)`.
+
+Migration rule for new code: **do not add new methods to MainWindow
+or any of the mixins above.** Instead, subscribe to ``TabSignals``
+or instantiate a controller with ``MainWindow`` as host.
+"""
 
 import sys
 import json
@@ -36,6 +64,12 @@ from PyQt6.QtGui import QAction, QKeySequence
 
 from ..data.database import Database
 from ..domain.repository import SingerRepository
+from ..history.service import (
+    HistoryService,
+    CreateSingerCommand,
+    UpdateSingerCommand,
+    DeleteSingerCommand,
+)
 from ..backup.service import AutoBackupService
 from ..config import (
     load_voice_groups,
@@ -46,42 +80,84 @@ from ..config import (
     set_last_active_project_id,
 )
 from ..core.export_service import ExportService
+from ..core.response_matrix import build_response_matrix
+from ..core.response_render_pdf import render_response_matrix_pdf
+from ..core.response_render_odt import render_response_matrix_odt
+from .export_format_dialog import ExportFormatDialog, SUPPORTED_FORMATS
 from .export_dialog import ExportDialog
 from PyQt6.QtWidgets import QFileDialog
+from .theme_manager import ThemeMixin
+from .tab_router import TabRouterMixin
+from .choraufstellung_launcher import ChorAufstellungLauncherMixin
+from .export_controller import (
+    ExportCoreMixin,
+    ExportJsonSyncMixin,
+    ExportTabSpecificMixin,
+)
+from .main_window_actions import MainWindowActionsMixin
 
 
-def get_icon(icon_name: str, fallback_pixmap):
-    """Load icon from system theme with fallback to Qt standard pixmap.
+# --- M-1 step 5: ``get_icon`` was moved to its own module to avoid a
+# circular import (tab_router -> main_window). Re-exported here for
+# backward compatibility with any code that imports it from
+# ``chormanager.ui.main_window``.
+from .icons import get_icon  # noqa: E402, F401
 
-    Args:
-        icon_name: System icon name (e.g., "document-new", "list-add")
-        fallback_pixmap: QStyle.StandardPixmap to use if theme icon not found
 
-    Returns:
-        QIcon instance
+# --- M-1 step 1: SingerDialog was moved to its own module.
+# Re-exported here for backward compatibility with any code that
+# imports ``chormanager.ui.main_window.SingerDialog``.
+from .forms.singer_dialog import SingerDialog  # noqa: E402, F401
+
+
+# --- M-1 step 3: ``refresh_tab_repositories`` was moved to its own
+# module (``chormanager/ui/choraufstellung_launcher.py``). Re-exported
+# here for backward compatibility with the test that imports it from
+# ``chormanager.ui.main_window``.
+from .choraufstellung_launcher import refresh_tab_repositories  # noqa: E402, F401
+
+
+class MainWindow(
+    QMainWindow,
+    ThemeMixin,
+    TabRouterMixin,
+    ChorAufstellungLauncherMixin,
+    ExportCoreMixin,
+    ExportJsonSyncMixin,
+    ExportTabSpecificMixin,
+    MainWindowActionsMixin,
+):
+    """Main window for ChorManager.
+
+    M-1 step 4: ``_set_light_theme`` and ``_set_dark_theme`` are now
+    inherited from ``ThemeMixin`` (see ``chormanager/ui/theme_manager.py``).
+    M-1 step 5: tab-routing methods (``_emit_selection``,
+    ``_update_context_toolbar``, ``_on_selection_changed``,
+    ``_update_info_labels``, ``_on_project_changed``, ``_on_event_selected``,
+    ``_on_besetzung_changed``, ``_on_tab_changed``) are inherited from
+    ``TabRouterMixin`` (see ``chormanager/ui/tab_router.py``).
+    M-1 step 6: the four ChorAufstellung-spawning methods
+    (``_open_choraufstellung``, ``_open_choraufstellung_selected_or_new``,
+    ``_open_choraufstellung_file``, ``_open_choraufstellung_for_event``)
+    and the ``_edit_formation`` wrapper are inherited from
+    ``ChorAufstellungLauncherMixin``
+    (see ``chormanager/ui/choraufstellung_launcher.py``).
+    M-1 step 7a: the export-core methods are inherited from
+    ``ExportCoreMixin`` (see ``chormanager/ui/export_controller.py``).
+    M-1 step 7b: the JSON-Sync export methods (``_export_singers_json``,
+    ``_export_events_json``, ``_export_availability_json``,
+    ``_export_singers_csv``, ``_export_all_sync``) are inherited from
+    ``ExportJsonSyncMixin``
+    (see ``chormanager/ui/export_controller.py``).
+    M-1 step 7c: the tab-specific export methods (``_export_besetzung``,
+    ``_export_termine``, ``_export_aufstellung``) are inherited from
+    ``ExportTabSpecificMixin``
+    (see ``chormanager/ui/export_controller.py``).
+    M-1 step 8: the per-tab action handlers (Singer, Event, Project
+    menus) are inherited from ``MainWindowActionsMixin``
+    (see ``chormanager/ui/main_window_actions.py``).
     """
-    from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QApplication
 
-    icon = QIcon.fromTheme(icon_name)
-    if icon.isNull():
-        style = QApplication.instance().style() if QApplication.instance() else None
-        if style:
-            icon = style.standardIcon(fallback_pixmap)
-    return icon
-
-
-from .singer_dialog import SingerDialog
-from .version_dialog import VersionCheckDialog
-from .export_handlers import ExportHandlers
-from .menu_builder import create_menu_bar
-from .toolbar_builder import update_context_toolbar
-from .choraufstellung_launcher import launch_choraufstellung, launch_for_event
-from .ui_setup import create_info_bar, create_central_widget
-
-
-class MainWindow(ExportHandlers, QMainWindow):
-    """Main window for ChorManager."""
 
     def __init__(self, db_path: str = None):
         """Initialize main window.
@@ -93,14 +169,11 @@ class MainWindow(ExportHandlers, QMainWindow):
 
         self.db_path = db_path
         self.db = Database(db_path)
-        try:
-            self.db.connect()
-            self.db.create_tables()
-        except Exception:
-            self.db.close()
-            raise
+        self.db.connect()
+        self.db.create_tables()
 
         self.singer_repo = SingerRepository(self.db)
+        self.history = HistoryService(max_entries=100)
         self.backup_service = AutoBackupService()
 
         if self.db_path:
@@ -137,7 +210,7 @@ class MainWindow(ExportHandlers, QMainWindow):
     def _setup_ui(self):
         """Set up the UI."""
         self.setWindowTitle("ChorManager")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(50, 50, 1280, 768)
 
         self._create_menu_bar()
         self._create_info_bar()
@@ -147,11 +220,379 @@ class MainWindow(ExportHandlers, QMainWindow):
 
     def _create_info_bar(self):
         """Create info bar below menu bar."""
-        create_info_bar(self)
+        self.info_bar = QWidget()
+        self.info_bar.setObjectName("infoBarWidget")
+        self.info_bar.setMinimumHeight(45)
+        self.info_bar.setStyleSheet("""
+            QWidget {
+                background-color: #e8f4f8;
+                border-bottom: 2px solid #4a90d9;
+                padding: 5px;
+            }
+            QLabel {
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 4px 12px;
+                border-radius: 4px;
+            }
+            QLabel#projectInfoLabel {
+                background-color: #4a90d9;
+                color: white;
+            }
+            QLabel#eventInfoLabel {
+                background-color: #e67e22;
+                color: white;
+            }
+        """)
+
+        info_layout = QHBoxLayout(self.info_bar)
+        info_layout.setContentsMargins(15, 8, 15, 8)
+        info_layout.setSpacing(15)
+
+        # Projekt-Status Label
+        project_status_label = QLabel("Aktives Projekt:")
+        project_status_label.setStyleSheet("font-weight: normal; color: #666;")
+        info_layout.addWidget(project_status_label)
+
+        self.project_info_label = QLabel("Keines")
+        self.project_info_label.setObjectName("projectInfoLabel")
+        self.project_info_label.setVisible(True)
+        self.project_info_label.setWordWrap(False)
+        self.project_info_label.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
+        )
+        info_layout.addWidget(self.project_info_label)
+
+        # Besetzung-Status Label
+        besetzung_status_label = QLabel("Aktive Besetzung:")
+        besetzung_status_label.setStyleSheet("font-weight: normal; color: #666;")
+        info_layout.addWidget(besetzung_status_label)
+
+        self.besetzung_info_label = QLabel("Keine")
+        self.besetzung_info_label.setObjectName("besetzungInfoLabel")
+        self.besetzung_info_label.setVisible(True)
+        self.besetzung_info_label.setWordWrap(False)
+        self.besetzung_info_label.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
+        )
+        info_layout.addWidget(self.besetzung_info_label)
+
+        info_layout.addStretch()
+
+        # Termin-Status Label
+        event_status_label = QLabel("Aktiver Termin:")
+        event_status_label.setStyleSheet("font-weight: normal; color: #666;")
+        info_layout.addWidget(event_status_label)
+
+        self.event_info_label = QLabel("Keiner")
+        self.event_info_label.setObjectName("eventInfoLabel")
+        self.event_info_label.setVisible(True)
+        self.event_info_label.setWordWrap(False)
+        self.event_info_label.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
+        )
+        info_layout.addWidget(self.event_info_label)
+
+        info_layout.addStretch()
+
+        # Add info bar to main layout
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(self.menuBar())
+        main_layout.addWidget(self.info_bar)
+
+        # Create container for menu + info bar
+        menu_container = QWidget()
+        menu_container.setLayout(main_layout)
+        self.setMenuWidget(menu_container)
 
     def _create_menu_bar(self):
         """Create menu bar."""
-        create_menu_bar(self)
+        menubar = self.menuBar()
+
+        file_menu = menubar.addMenu("&Datei")
+
+        file_menu.addSeparator()
+
+        backup_restore_action = QAction("Backup & Restore...", self)
+        backup_restore_action.setIcon(
+            get_icon("media-floppy", QStyle.StandardPixmap.SP_DriveFDIcon)
+        )
+        backup_restore_action.triggered.connect(self._open_backup_restore)
+        file_menu.addAction(backup_restore_action)
+
+
+        exit_action = QAction("Beenden", self)
+        exit_action.setIcon(
+            get_icon("application-exit", QStyle.StandardPixmap.SP_DialogCloseButton)
+        )
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        edit_menu = menubar.addMenu("&Bearbeiten")
+
+        undo_action = QAction("Rückgängig", self)
+        undo_action.setIcon(get_icon("edit-undo", QStyle.StandardPixmap.SP_ArrowBack))
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_action.triggered.connect(self._undo)
+        edit_menu.addAction(undo_action)
+
+        redo_action = QAction("Wiederholen", self)
+        redo_action.setIcon(
+            get_icon("edit-redo", QStyle.StandardPixmap.SP_ArrowForward)
+        )
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_action.triggered.connect(self._redo)
+        edit_menu.addAction(redo_action)
+
+        projekt_menu = menubar.addMenu("&Projekt")
+
+        new_projekt_action = QAction("Neu...", self)
+        new_projekt_action.setIcon(
+            get_icon("document-new", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        new_projekt_action.triggered.connect(self._new_projekt)
+        projekt_menu.addAction(new_projekt_action)
+
+        save_projekt_action = QAction("Speichern", self)
+        save_projekt_action.setIcon(
+            get_icon("document-save", QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+        save_projekt_action.triggered.connect(self._save_projekt)
+        projekt_menu.addAction(save_projekt_action)
+
+        open_projekt_action = QAction("Öffnen...", self)
+        open_projekt_action.setIcon(
+            get_icon("document-open", QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        open_projekt_action.triggered.connect(self._open_projekt)
+        projekt_menu.addAction(open_projekt_action)
+        
+        edit_projekt_action = QAction("Bearbeiten...", self)
+        edit_projekt_action.setIcon(get_icon("document-edit", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        edit_projekt_action.triggered.connect(self._edit_project)
+        projekt_menu.addAction(edit_projekt_action)
+        
+        delete_projekt_action = QAction("Löschen", self)
+        delete_projekt_action.setIcon(get_icon("edit-delete", QStyle.StandardPixmap.SP_TrashIcon))
+        delete_projekt_action.triggered.connect(self._delete_project)
+        projekt_menu.addAction(delete_projekt_action)
+        
+        projekt_menu.addSeparator()
+
+        export_menu = projekt_menu.addMenu("Export")
+        
+        export_libreoffice_action = QAction("LibreOffice exportieren...", self)
+        export_libreoffice_action.setIcon(
+            get_icon("x-office-document", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        export_libreoffice_action.triggered.connect(self._export_project_libreoffice)
+        export_menu.addAction(export_libreoffice_action)
+        
+        export_csv_action = QAction("CSV exportieren...", self)
+        export_csv_action.setIcon(
+            get_icon("x-office-spreadsheet", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        export_csv_action.triggered.connect(self._export_project_csv)
+        export_menu.addAction(export_csv_action)
+
+        saenger_menu = menubar.addMenu("Sänger")
+        
+        add_singer_action = QAction("Hinzufügen...", self)
+        add_singer_action.setIcon(get_icon("list-add", QStyle.StandardPixmap.SP_FileIcon))
+        add_singer_action.triggered.connect(lambda: self.singers_tab._add_singer() if hasattr(self, "singers_tab") else None)
+        saenger_menu.addAction(add_singer_action)
+        
+        edit_singer_action = QAction("Bearbeiten...", self)
+        edit_singer_action.setIcon(get_icon("document-edit", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        edit_singer_action.triggered.connect(lambda: self.singers_tab._edit_singer() if hasattr(self, "singers_tab") else None)
+        saenger_menu.addAction(edit_singer_action)
+        
+        delete_singer_action = QAction("Löschen", self)
+        delete_singer_action.setIcon(get_icon("edit-delete", QStyle.StandardPixmap.SP_TrashIcon))
+        delete_singer_action.triggered.connect(lambda: self.singers_tab._delete_singer() if hasattr(self, "singers_tab") else None)
+        saenger_menu.addAction(delete_singer_action)
+        
+        saenger_menu.addSeparator()
+        
+        saenger_export_menu = saenger_menu.addMenu("Export")
+        export_lo_saenger = QAction("LibreOffice exportieren...", self)
+        export_lo_saenger.triggered.connect(lambda: self._export_tab(1))
+        saenger_export_menu.addAction(export_lo_saenger)
+        export_csv_saenger = QAction("CSV exportieren...", self)
+        export_csv_saenger.triggered.connect(lambda: self._export_tab_csv(1))
+        saenger_export_menu.addAction(export_csv_saenger)
+
+        besetzung_menu = menubar.addMenu("Besetzung")
+        
+        add_besetzung_action = QAction("Hinzufügen...", self)
+        add_besetzung_action.setIcon(get_icon("list-add", QStyle.StandardPixmap.SP_FileIcon))
+        add_besetzung_action.triggered.connect(lambda: self.besetzung_tab._new_besetzung() if hasattr(self, "besetzung_tab") else None)
+        besetzung_menu.addAction(add_besetzung_action)
+        
+        edit_besetzung_action = QAction("Bearbeiten...", self)
+        edit_besetzung_action.setIcon(get_icon("document-edit", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        edit_besetzung_action.triggered.connect(lambda: self.besetzung_tab._edit_besetzung() if hasattr(self, "besetzung_tab") else None)
+        besetzung_menu.addAction(edit_besetzung_action)
+        
+        delete_besetzung_action = QAction("Löschen", self)
+        delete_besetzung_action.setIcon(get_icon("edit-delete", QStyle.StandardPixmap.SP_TrashIcon))
+        delete_besetzung_action.triggered.connect(lambda: self.besetzung_tab._delete_besetzung() if hasattr(self, "besetzung_tab") else None)
+        besetzung_menu.addAction(delete_besetzung_action)
+        
+        besetzung_menu.addSeparator()
+        
+        besetzung_export_menu = besetzung_menu.addMenu("Export")
+        export_lo_besetzung = QAction("LibreOffice exportieren...", self)
+        export_lo_besetzung.triggered.connect(self._export_besetzung)
+        besetzung_export_menu.addAction(export_lo_besetzung)
+        export_csv_besetzung = QAction("CSV exportieren...", self)
+        export_csv_besetzung.triggered.connect(self._export_besetzung)
+        besetzung_export_menu.addAction(export_csv_besetzung)
+
+        termin_menu = menubar.addMenu("&Termine")
+
+        new_event_action = QAction("Neuer Termin...", self)
+        new_event_action.setIcon(
+            get_icon("list-add", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        new_event_action.triggered.connect(self._new_event)
+        termin_menu.addAction(new_event_action)
+        
+        edit_event_action = QAction("Bearbeiten...", self)
+        edit_event_action.setIcon(get_icon("document-edit", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        edit_event_action.triggered.connect(self._edit_event)
+        termin_menu.addAction(edit_event_action)
+        
+        delete_event_action = QAction("Löschen", self)
+        delete_event_action.setIcon(get_icon("edit-delete", QStyle.StandardPixmap.SP_TrashIcon))
+        delete_event_action.triggered.connect(self._delete_event)
+        termin_menu.addAction(delete_event_action)
+        
+        termin_menu.addSeparator()
+
+        manage_availability_action = QAction("Verfügbarkeit verwalten...", self)
+        manage_availability_action.setIcon(
+            get_icon("view-calendar", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        manage_availability_action.triggered.connect(self._manage_availability)
+        termin_menu.addAction(manage_availability_action)
+
+        termin_menu.addSeparator()
+
+        list_events_action = QAction("Terminliste anzeigen...", self)
+        list_events_action.setIcon(
+            get_icon("x-office-spreadsheet", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        list_events_action.triggered.connect(self._list_events)
+        termin_menu.addAction(list_events_action)
+
+        termin_menu.addSeparator()
+        termin_export_menu = termin_menu.addMenu("Export")
+        export_lo_termin = QAction("LibreOffice exportieren...", self)
+        export_lo_termin.triggered.connect(self._export_termine)
+        termin_export_menu.addAction(export_lo_termin)
+        export_csv_termin = QAction("CSV exportieren...", self)
+        export_csv_termin.triggered.connect(self._export_termine)
+        termin_export_menu.addAction(export_csv_termin)
+
+        choraufstellung_menu = menubar.addMenu("Aufstellung")
+
+        # Bug-fix 2026-06-12: 'In Aufstellung öffnen...' was wired to
+        # ``self._open_choraufstellung`` which always spawned a fresh
+        # editor (no CHOR_FILE) and therefore showed an empty grid
+        # when the user wanted to reopen a saved formation. It is now
+        # wired to ``self._edit_formation`` (same handler as
+        # context-toolbar and right-click 'Bearbeiten'), which opens
+        # the currently selected formation file. If no row is
+        # selected, it falls back to opening a fresh editor.
+        open_action = QAction("In Aufstellung öffnen...", self)
+        open_action.setIcon(
+            get_icon("media-playback-start", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        open_action.triggered.connect(
+            lambda: self._open_choraufstellung_selected_or_new()
+        )
+        choraufstellung_menu.addAction(open_action)
+
+        choraufstellung_menu.addSeparator()
+        aufstellung_export_menu = choraufstellung_menu.addMenu("Export")
+        export_lo_aufstellung = QAction("LibreOffice exportieren...", self)
+        export_lo_aufstellung.triggered.connect(self._export_aufstellung)
+        aufstellung_export_menu.addAction(export_lo_aufstellung)
+        export_csv_aufstellung = QAction("CSV exportieren...", self)
+        export_csv_aufstellung.triggered.connect(self._export_aufstellung)
+        aufstellung_export_menu.addAction(export_csv_aufstellung)
+
+        repertoire_menu = menubar.addMenu("Repertoire")
+
+        add_rep_action = QAction("Hinzufügen...", self)
+        add_rep_action.setIcon(get_icon("list-add", QStyle.StandardPixmap.SP_FileIcon))
+        add_rep_action.triggered.connect(lambda: self.repertoire_tab._add_repertoire() if hasattr(self, "repertoire_tab") else None)
+        repertoire_menu.addAction(add_rep_action)
+
+        edit_rep_action = QAction("Bearbeiten...", self)
+        edit_rep_action.setIcon(
+            get_icon("document-edit", QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        )
+        edit_rep_action.triggered.connect(lambda: self.repertoire_tab._edit_repertoire() if hasattr(self, "repertoire_tab") else None)
+        repertoire_menu.addAction(edit_rep_action)
+
+        delete_rep_action = QAction("Löschen", self)
+        delete_rep_action.setIcon(get_icon("edit-delete", QStyle.StandardPixmap.SP_TrashIcon))
+        delete_rep_action.triggered.connect(lambda: self.repertoire_tab._delete_repertoire() if hasattr(self, "repertoire_tab") else None)
+        repertoire_menu.addAction(delete_rep_action)
+
+        view_menu = menubar.addMenu("&Ansicht")
+
+        light_theme_action = QAction("Hell", self)
+        light_theme_action.setIcon(
+            get_icon("weather-clear", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        light_theme_action.triggered.connect(self._set_light_theme)
+        view_menu.addAction(light_theme_action)
+
+        dark_theme_action = QAction("Dunkel", self)
+        dark_theme_action.setIcon(
+            get_icon("weather-night", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        dark_theme_action.triggered.connect(self._set_dark_theme)
+        view_menu.addAction(dark_theme_action)
+
+        konfig_menu = menubar.addMenu("Konfiguration")
+
+        konfig_action = QAction("Einstellungen...", self)
+        konfig_action.setIcon(
+            get_icon("preferences-system", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        konfig_action.triggered.connect(self._show_config)
+        konfig_menu.addAction(konfig_action)
+
+        marketing_menu = menubar.addMenu("Marketing")
+
+        selbstdarstellung_action = QAction("Selbstdarstellung...", self)
+        selbstdarstellung_action.setIcon(
+            get_icon("x-office-document", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        selbstdarstellung_action.triggered.connect(self._show_selbstdarstellung)
+        marketing_menu.addAction(selbstdarstellung_action)
+
+
+        hilfe_menu = menubar.addMenu("&Hilfe")
+
+        check_version_action = QAction("Version prüfen", self)
+        check_version_action.setIcon(get_icon("system-software-update", QStyle.StandardPixmap.SP_FileIcon))
+        check_version_action.triggered.connect(self._check_version)
+        hilfe_menu.addAction(check_version_action)
+
+        hilfe_menu.addSeparator()
+
+        about_action = QAction("Über", self)
+        about_action.setIcon(get_icon("help-about", QStyle.StandardPixmap.SP_FileIcon))
+        about_action.triggered.connect(self._show_about)
+        hilfe_menu.addAction(about_action)
 
     def _create_tool_bar(self):
         """Create toolbar."""
@@ -160,7 +601,169 @@ class MainWindow(ExportHandlers, QMainWindow):
 
     def _create_central_widget(self):
         """Create central widget with sidebar navigation."""
-        create_central_widget(self)
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        # Horizontal splitter: Sidebar links, Content rechts
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout = QHBoxLayout(central)
+        layout.addWidget(splitter)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Sidebar (linke Navigationsspalte)
+        sidebar = QWidget()
+        sidebar.setMinimumWidth(140)
+        sidebar.setMaximumWidth(140)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(5, 10, 5, 10)
+        sidebar_layout.setSpacing(5)
+
+        # Navigation buttons (OBEN zuerst) - mit Icons
+        self.nav_projects = QPushButton("Projekte")
+        self.nav_projects.setIcon(
+            get_icon("folder", QStyle.StandardPixmap.SP_DirClosedIcon)
+        )
+        self.nav_projects.setCheckable(True)
+        self.nav_projects.setChecked(True)
+        self.nav_projects.clicked.connect(lambda: self._switch_view(0))
+        sidebar_layout.addWidget(self.nav_projects)
+
+        self.nav_singers = QPushButton("Sänger")
+        self.nav_singers.setIcon(
+            get_icon("user-info", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        self.nav_singers.setCheckable(True)
+        self.nav_singers.clicked.connect(lambda: self._switch_view(1))
+        sidebar_layout.addWidget(self.nav_singers)
+
+        self.nav_besetzung = QPushButton("Besetzung")
+        self.nav_besetzung.setIcon(
+            get_icon("system-users", QStyle.StandardPixmap.SP_DirHomeIcon)
+        )
+        self.nav_besetzung.setCheckable(True)
+        self.nav_besetzung.clicked.connect(lambda: self._switch_view(2))
+        sidebar_layout.addWidget(self.nav_besetzung)
+
+        self.nav_events = QPushButton("Termine")
+        self.nav_events.setIcon(
+            get_icon("x-office-calendar", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        self.nav_events.setCheckable(True)
+        self.nav_events.clicked.connect(lambda: self._switch_view(3))
+        sidebar_layout.addWidget(self.nav_events)
+
+        self.nav_formations = QPushButton("Aufstellung")
+        self.nav_formations.setIcon(
+            get_icon("audio-volume-high", QStyle.StandardPixmap.SP_MediaVolume)
+        )
+        self.nav_formations.setCheckable(True)
+        self.nav_formations.clicked.connect(lambda: self._switch_view(4))
+        sidebar_layout.addWidget(self.nav_formations)
+
+        self.nav_repertoire = QPushButton("Repertoire")
+        self.nav_repertoire.setIcon(
+            get_icon("view-list", QStyle.StandardPixmap.SP_FileIcon)
+        )
+        self.nav_repertoire.setCheckable(True)
+        self.nav_repertoire.clicked.connect(lambda: self._switch_view(5))
+        sidebar_layout.addWidget(self.nav_repertoire)
+
+        sidebar_layout.addStretch()
+
+        splitter.addWidget(sidebar)
+
+        # Content-Bereich (rechts) - mit horizontaler Context Toolbar oben
+        content_area = QWidget()
+        content_layout = QVBoxLayout(content_area)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+# Page title bar
+        self.page_title_label = QLabel("Projektverwaltung")
+        self.page_title_label.setObjectName("pageTitle")
+        content_layout.addWidget(self.page_title_label)
+
+        # Context toolbar (horizontal oberhalb des Content)
+        self.context_toolbar = QToolBar("Aktionen")
+        self.context_toolbar.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.context_toolbar.setMovable(False)
+        self.context_toolbar.setIconSize(QSize(16, 16))
+        content_layout.addWidget(self.context_toolbar)
+
+        # Runtime selection state. Initialised to None so that code
+        # paths that read self.current_project / self.current_event
+        # (e.g. line 1042: 'self.current_project.id if
+        # self.current_project else None') never trip an AttributeError
+        # when no project has been selected yet (e.g. fresh DB or a
+        # stale last_active_project_id that no longer exists).
+        # _on_project_changed / _on_event_selected (in tab_router.py)
+        # overwrite these when a real selection happens.
+        self.current_project = None
+        self.current_event = None
+
+        from .views.projects_tab import ProjectsTab
+
+        self.projects_tab = ProjectsTab(self.db)
+        self.projects_tab.current_project_changed.connect(self._on_project_changed)
+        self.projects_tab._load_active_project()
+        self._update_context_toolbar(0, self.projects_tab.current_project)
+
+        from .views.singers_tab import SingersTab
+
+        self.singers_tab = SingersTab(self.db)
+
+        from .views.events_tab import EventsTab
+
+        self.events_tab = EventsTab(self.db)
+        self.events_tab.event_selected.connect(self._on_event_selected)
+        self.events_tab._restore_active_event()
+
+        from .views.besetzung_tab import BesetzungTab
+        self.besetzung_tab = BesetzungTab(self.db)
+        self.besetzung_tab.active_besetzung_changed.connect(self._on_besetzung_changed)
+        self.besetzung_tab._restore_active_besetzung()
+
+        from .views.choraufstellung_tab import ChorAufstellungTab
+        self.choraufstellung_tab = ChorAufstellungTab(self.db)
+
+        from .views.repertoire_tab import RepertoireTab
+        self.repertoire_tab = RepertoireTab(self.db)
+
+        # Stacked widget für Content
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.projects_tab)
+        self.content_stack.addWidget(self.singers_tab)
+        self.content_stack.addWidget(self.besetzung_tab)
+        self.content_stack.addWidget(self.events_tab)
+        self.content_stack.addWidget(self.choraufstellung_tab)
+        self.content_stack.addWidget(self.repertoire_tab)
+
+        content_layout.addWidget(self.content_stack)
+
+        splitter.addWidget(content_area)
+        splitter.setStretchFactor(1, 1)
+
+        # Initialize context toolbar for current view (projects)
+        self._update_context_toolbar(0, self.projects_tab.current_project)
+
+        # Connect selection signals
+        self.projects_tab.table.selectionModel().selectionChanged.connect(
+            lambda: self._emit_selection(0)
+        )
+        self.singers_tab.table.selectionModel().selectionChanged.connect(
+            lambda: self._emit_selection(1)
+        )
+        self.besetzung_tab.table.selectionModel().selectionChanged.connect(
+            lambda: self._emit_selection(2)
+        )
+        self.events_tab.table.selectionModel().selectionChanged.connect(
+            lambda: self._emit_selection(3)
+        )
+        self.choraufstellung_tab.table.selectionModel().selectionChanged.connect(
+            lambda: self._emit_selection(4)
+        )
 
     def _switch_view(self, index):
         """Switch content view."""
@@ -182,126 +785,7 @@ class MainWindow(ExportHandlers, QMainWindow):
         self.nav_repertoire.setChecked(index == 5)
         self._emit_selection(index)
 
-    def _emit_selection(self, tab_index):
-        """Emit selection signal with current selected item for given tab.
 
-        Args:
-            tab_index: Index of tab (0-3)
-        """
-        selection = None
-        if tab_index == 0 and self.projects_tab.current_project:
-            selection = self.projects_tab.current_project
-        elif tab_index == 1:
-            row = self.singers_tab.table.currentRow()
-            if row >= 0:
-                item = self.singers_tab.table.item(row, 0)
-                singer_id = item.data(Qt.ItemDataRole.UserRole)
-                selection = (
-                    self.singers_tab.singer_repo.get_by_id(singer_id)
-                    if singer_id
-                    else None
-                )
-        elif tab_index == 2:  # Besetzung
-            row = self.besetzung_tab.table.currentRow()
-            if row >= 0:
-                besetzungen = self.besetzung_tab.besetzung_repo.get_all()
-                selection = besetzungen[row] if row < len(besetzungen) else None
-        elif tab_index == 3:  # Events
-            row = self.events_tab.table.currentRow()
-            if row >= 0:
-                item = self.events_tab.table.item(row, 0)
-                event_id = item.data(Qt.ItemDataRole.UserRole)
-                selection = (
-                    self.events_tab.event_repo.get_by_id(event_id) if event_id else None
-                )
-        elif tab_index == 4:  # Aufstellung
-            row = self.choraufstellung_tab.table.currentRow()
-            if row >= 0:
-                filename = self.choraufstellung_tab.table.item(row, 0).text()
-                selection = filename
-        elif tab_index == 5:  # Repertoire
-            row = self.repertoire_tab.table.currentRow()
-            if row >= 0:
-                title = self.repertoire_tab.table.item(row, 1).text()
-                selection = title
-
-        self._on_selection_changed(tab_index, selection)
-
-    def _on_selection_changed(self, tab_index, selection):
-        """Handle selection change from any tab to update context toolbar.
-
-        Args:
-            tab_index: Index of the tab (int)
-            selection: Selected object (Project/Event/Singer) or None
-        """
-        self._update_context_toolbar(tab_index, selection)
-
-    def _update_context_toolbar(self, tab_index, selection):
-        """Update toolbar actions based on active tab and selection.
-
-        Args:
-            tab_index: Index of active tab.
-            selection: Selected item object or None.
-        """
-        update_context_toolbar(self, tab_index, selection)
-
-    def _update_info_labels(self):
-        """Update the info labels in the info bar."""
-        # Update project info label
-        if self.projects_tab.current_project:
-            project = self.projects_tab.current_project
-            self.project_info_label.setText(f"{project.name}")
-        else:
-            self.project_info_label.setText("Keines")
-
-        # Update event info label
-        if self.current_event:
-            event = self.current_event
-            self.event_info_label.setText(f"{event.name} ({event.date[:10]})")
-        else:
-            self.event_info_label.setText("Keiner")
-
-    def _on_project_changed(self):
-        """Handle project selection change."""
-        project = self.projects_tab.current_project
-        self._update_info_labels()
-        self.current_project = project
-
-        if project:
-            set_last_active_project_id(project.id)
-
-        if hasattr(self, "events_tab"):
-            self.events_tab.set_project_filter(project)
-        if hasattr(self, "besetzung_tab"):
-            self.besetzung_tab.set_project(project)
-        if hasattr(self, "choraufstellung_tab"):
-            self.choraufstellung_tab.set_project(project)
-
-        self._refresh_tabs()
-
-    def _on_event_selected(self, event):
-        """Handle event selection."""
-        self.current_event = event
-        self._update_info_labels()
-        if hasattr(self, "choraufstellung_tab"):
-            self.choraufstellung_tab.set_event(event)
-
-        if event:
-            self.event_info_label.setText(
-                f"<b>Ausgewählter Termin:</b> {event.name} am {event.date[:10]}"
-            )
-            self.event_info_label.setVisible(True)
-        else:
-            self.event_info_label.setVisible(False)
-
-    def _on_besetzung_changed(self, besetzung):
-        """Handle active besetzung change."""
-        if besetzung:
-            self.besetzung_info_label.setText(f"<b>{besetzung.name}</b>")
-            self.besetzung_info_label.setVisible(True)
-        else:
-            self.besetzung_info_label.setText("Keine")
-            self.besetzung_info_label.setVisible(False)
 
     def _create_status_bar(self):
         """Create status bar."""
@@ -309,46 +793,29 @@ class MainWindow(ExportHandlers, QMainWindow):
 
     def _refresh_tabs(self):
         """Refresh all tabs."""
-        if hasattr(self, "projects_tab"):
-            self.projects_tab._load_projects()
         if hasattr(self, "singers_tab"):
             self.singers_tab._load_singers()
-        if hasattr(self, "besetzung_tab"):
-            self.besetzung_tab._load_besetzungen()
         if hasattr(self, "events_tab"):
             self.events_tab._load_events()
-        if hasattr(self, "repertoire_tab"):
-            self.repertoire_tab._load_repertoire()
 
-    def _add_singer(self):
-        """Add new singer."""
-        self.singers_tab._add_singer()
+    def _on_search_text_changed(self, text):
+        """Handle search text change."""
+        self.singers_tab._load_singers()
 
-    def _edit_singer(self):
-        """Edit selected singer."""
-        self.singers_tab._edit_singer()
+    def _on_filter_changed(self, index):
+        """Handle voice group filter change."""
+        self.singers_tab._load_singers()
 
-    def _delete_singer(self):
-        self.singers_tab._delete_singer()
-
-    def _edit_event(self):
-        self.events_tab._edit_event()
-
-    def _delete_event(self):
-        self.events_tab._delete_event()
-
-    def _duplicate_event(self):
-        self.events_tab._duplicate_event()
-
-    def _manage_availability(self):
+    # NOTE: Singer/Event/Project action handlers moved to
+    # ``MainWindowActionsMixin`` in M-1 step 8 (see
+    # ``chormanager/ui/main_window_actions.py``).
         self.events_tab._manage_availability()
 
-    def _open_choraufstellung_for_event(self, event):
-        """Open ChorAufstellung with event data via temp file."""
-        launch_for_event(self, event)
-
-    def _edit_formation(self):
-        self.choraufstellung_tab._edit_formation()
+    # NOTE: ``_open_choraufstellung_for_event`` and ``_edit_formation``
+    # moved to ``ChorAufstellungLauncherMixin`` in M-1 step 6
+    # (see ``chormanager/ui/choraufstellung_launcher.py``). The wrapper
+    # methods below remain here because they are still called from
+    # many places in MainWindow.
 
     def _duplicate_formation(self):
         self.choraufstellung_tab._duplicate_formation()
@@ -359,121 +826,23 @@ class MainWindow(ExportHandlers, QMainWindow):
     def _new_formation(self):
         self.choraufstellung_tab._new_formation()
 
-    def _set_light_theme(self):
-        """Set professional light theme."""
-        from pathlib import Path
-        theme_file = Path(__file__).parent / "themes" / "light.qss"
-        self.setStyleSheet(theme_file.read_text())
-        set_theme("light")
-        self.statusBar().showMessage("Helles Theme aktiviert")
+    def _undo(self):
+        """Undo last action."""
+        if self.history.can_undo():
+            self.history.undo()
+            self._refresh_tabs()
+            self.statusBar().showMessage("Rückgängig gemacht")
 
-    def _set_dark_theme(self):
-        """Set professional dark theme."""
-        from pathlib import Path
-        theme_file = Path(__file__).parent / "themes" / "dark.qss"
-        self.setStyleSheet(theme_file.read_text())
-        set_theme("dark")
-        self.statusBar().showMessage("Dunkles Theme aktiviert")
+    def _redo(self):
+        """Redo last undone action."""
+        if self.history.can_redo():
+            self.history.redo()
+            self._refresh_tabs()
+            self.statusBar().showMessage("Wiederholt")
 
-    def _new_event(self):
-        """Create a new event."""
-        from .dialogs import EventDialog
-        from ..domain.repository import EventRepository
-
-        prefilled_project_id = self.current_project.id if self.current_project else None
-        dialog = EventDialog(db=self.db, parent=self, prefilled_project_id=prefilled_project_id)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            data = dialog.get_data()
-
-            if not data.get("name"):
-                QMessageBox.warning(self, "Fehler", "Name ist erforderlich")
-                return
-
-            repo = EventRepository(self.db)
-            repo.create(**data)
-            if hasattr(self, 'projects_tab'):
-                self.projects_tab._load_projects()
-            if hasattr(self, 'events_tab'):
-                self.events_tab._load_events()
-
-            self.statusBar().showMessage("Termin erstellt")
-
-    def _manage_availability(self):
-        """Manage availability for events."""
-        self.events_tab._manage_availability()
-
-    def _list_events(self):
-        """List all events."""
-        from .dialogs import EventDialog
-        from ..domain.repository import EventRepository
-        from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QMessageBox
-
-        repo = EventRepository(self.db)
-        events = repo.get_all()
-
-        if not events:
-            QMessageBox.information(self, "Termine", "Keine Termine vorhanden")
-            return
-
-        # Show events in a simple dialog
-        event_text = "Vorhandene Termine:\n\n"
-        for event in events:
-            event_text += f"- {event.name} ({event.date}) [{event.event_type}]\n"
-
-        QMessageBox.information(self, "Termine", event_text)
-
-    def _export_all_sync(self):
-        """Export all sync files to default location."""
-        from PyQt6.QtWidgets import QMessageBox
-        from ..export.sync import export_all_sync
-
-        try:
-            result = export_all_sync(self.db)
-
-            output_text = "Exportierte Dateien:\n\n"
-            for export_type, path in result.items():
-                output_text += f"{export_type}: {path}\n"
-
-            self.statusBar().showMessage("Alle Sync-Dateien exportiert")
-            QMessageBox.information(self, "Sync-Export", output_text)
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", f"Export fehlgeschlagen:\n{str(e)}")
-
-    def _new_projekt(self):
-        """Create new project."""
-        self.projects_tab._add_project()
-
-    def _edit_project(self):
-        """Edit selected project."""
-        self.projects_tab._edit_project()
-
-    def _delete_project(self):
-        """Delete selected project."""
-        self.projects_tab._delete_project()
-
-    def _duplicate_project(self):
-        """Duplicate selected project."""
-        self.projects_tab._duplicate_project()
-
-    def _save_projekt(self):
-        """Save current project."""
-        from PyQt6.QtWidgets import QMessageBox
-
-        project = self.projects_tab.current_project
-        if project:
-            QMessageBox.information(
-                self, "Speichern", f"Projekt '{project.name}' ist bereits gespeichert."
-            )
-        else:
-            QMessageBox.warning(self, "Speichern", "Kein Projekt ausgewählt.")
-
-    def _open_projekt(self):
-        """Open existing project."""
-        self.content_stack.setCurrentIndex(0)
-        QMessageBox.information(
-            self, "Öffnen", "Bitte wählen Sie ein Projekt aus der Liste aus."
-        )
+    # NOTE: ``_export_csv``, ``_export_pdf`` and ``_export_libreoffice`` moved to
+    # ``ExportCoreMixin`` in M-1 step 7a (see
+    # ``chormanager/ui/export_controller.py``).
 
     def _show_config(self):
         """Show configuration dialog."""
@@ -487,18 +856,23 @@ class MainWindow(ExportHandlers, QMainWindow):
         from PyQt6.QtWidgets import QMessageBox
         import subprocess
         from datetime import datetime
+        from pathlib import Path
+
+        # Repo root = three levels above this module
+        # (chormanager/ui/main_window.py -> repo). Using the computed
+        # path instead of a hardcoded absolute path keeps the dialog
+        # working when the app is installed elsewhere.
+        app_root = str(Path(__file__).parent.parent.parent)
 
         try:
-            from ..config import get_app_dir
-            app_dir = str(get_app_dir())
             git_hash = subprocess.check_output(
                 ["git", "describe", "--tags", "--abbrev=7", "--always", "--dirty"],
-                cwd=app_dir,
+                cwd=app_root,
                 text=True,
             ).strip()
             commit_date = subprocess.check_output(
                 ["git", "log", "-1", "--format=%cd", "--date=short"],
-                cwd=app_dir,
+                cwd=app_root,
                 text=True,
             ).strip()
         except Exception:
@@ -520,22 +894,23 @@ class MainWindow(ExportHandlers, QMainWindow):
         dialog = SelbstdarstellungDialog(self.db, self)
         dialog.exec()
 
-    def _open_choraufstellung(self):
-        """Open Choraufstellung app with current project/event data."""
-        launch_choraufstellung(self)
+    def _check_version(self):
+        """Open version check dialog."""
+        dialog = VersionCheckDialog(self)
+        dialog.exec()
 
-    def _open_choraufstellung_file(self, filepath: str = None):
-        """Open ChorAufstellung app, optionally with a specific file."""
-        launch_choraufstellung(self, filepath=filepath)
+    # NOTE: ``_open_choraufstellung``, ``_open_choraufstellung_selected_or_new`` and
+    # ``_open_choraufstellung_file`` moved to ``ChorAufstellungLauncherMixin``
+    # in M-1 step 6 (see ``chormanager/ui/choraufstellung_launcher.py``).
 
     def _open_backup_restore(self):
         """Open Backup & Restore dialog."""
-        from ..export.backup_service import ApplicationBackupService
+        from ..export.backup_service import BackupService
         from ..ui.dialogs import BackupRestoreDialog
         from pathlib import Path
 
         app_root = Path(__file__).parent.parent.parent
-        service = ApplicationBackupService(app_root)
+        service = BackupService(app_root)
 
         dialog = BackupRestoreDialog(self)
         dialog.service = service
@@ -549,25 +924,13 @@ class MainWindow(ExportHandlers, QMainWindow):
             self.db.close()
             self.db = Database(self.db_path)
             self.db.connect()
-            
+
             self.singer_repo = SingerRepository(self.db)
-            
-            for tab_attr in ['projects_tab', 'singers_tab', 'besetzung_tab', 'events_tab']:
+
+            for tab_attr in ['projects_tab', 'singers_tab', 'besetzung_tab', 'events_tab', 'repertoire_tab', 'choraufstellung_tab']:
                 if hasattr(self, tab_attr):
                     tab = getattr(self, tab_attr)
-                    if hasattr(tab, 'db'):
-                        tab.db = self.db
-                    if hasattr(tab, 'singer_repo'):
-                        tab.singer_repo = self.singer_repo
-                    if hasattr(tab, 'project_repo'):
-                        from ..domain.repository import ProjectRepository
-                        tab.project_repo = ProjectRepository(self.db)
-                    if hasattr(tab, 'event_repo'):
-                        from ..domain.repository import EventRepository
-                        tab.event_repo = EventRepository(self.db)
-                    if hasattr(tab, 'besetzung_repo'):
-                        from ..domain.repository import BesetzungRepository
-                        tab.besetzung_repo = BesetzungRepository(self.db)
+                    refresh_tab_repositories(tab, self.db)
             
             if hasattr(self, 'projects_tab'):
                 self.projects_tab._load_projects()
@@ -577,6 +940,8 @@ class MainWindow(ExportHandlers, QMainWindow):
                 self.events_tab._load_events()
             if hasattr(self, 'besetzung_tab'):
                 self.besetzung_tab._load_besetzungen()
+            if hasattr(self, 'repertoire_tab'):
+                self.repertoire_tab._load_repertoire()
             
             self.statusBar().showMessage("Datenbank nach Backup-Restore neu geladen.", 3000)
         except Exception as e:
@@ -585,29 +950,12 @@ class MainWindow(ExportHandlers, QMainWindow):
             )
 
 
-    def _get_data_dir(self):
-        """Get current data directory."""
-        from pathlib import Path
-        from ..config import load_app_config
+    # NOTE: ``_export_response_matrix``, ``_get_export_config_for_current_tab``,
+    # ``_export_tab_generic``, ``_export_project_libreoffice``, ``_export_project_csv``,
+    # ``_export_tab`` and ``_export_tab_csv`` (and the ``_TAB_EXPORT_CONFIG`` class
+    # attribute) moved to ``ExportCoreMixin`` in M-1 step 7a
+    # (see ``chormanager/ui/export_controller.py``).
 
-        config = load_app_config()
-        return Path(
-            config.get("app", {}).get("data_dir", "~/.local/share/chormanager")
-        ).expanduser()
-
-    def closeEvent(self, event):
-        """Handle window close."""
-        if self.db_path:
-            self.backup_service.backup_before_save(self.db_path)
-
-        self.db.close()
-        event.accept()
-
-
-
-
-    def _check_version(self):
-        """Open version check dialog."""
-        dialog = VersionCheckDialog(self)
-        dialog.exec()
-
+    # NOTE: ``_export_besetzung``, ``_export_termine`` and
+    # ``_export_aufstellung`` moved to ``ExportTabSpecificMixin``
+    # in M-1 step 7c (see ``chormanager/ui/export_controller.py``).

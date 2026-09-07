@@ -1,6 +1,5 @@
 # UI: Grid widget components - SingerTile and FormationGrid
 # Extracted from main.py for better separation of concerns
-import sys
 try:
     from PyQt6.QtWidgets import (
         QFrame, QLabel, QPushButton, QVBoxLayout, QMenu, QMessageBox,
@@ -16,20 +15,8 @@ except ImportError:
     from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QRect, QTimer
     from PyQt5.QtGui import QDrag, QColor, QFont
 
+from qt_compat import exec_qt
 from singer_model import voice_group_color
-
-# Compatibility: create PyQt6-style enum attributes when running under PyQt5
-if 'PyQt5' in sys.modules:
-    QFrame.Shape.Panel = QFrame.Panel
-    QFrame.Shape.StyledPanel = QFrame.StyledPanel
-    QFrame.Shadow.Raised = QFrame.Raised
-    QFrame.Shadow.Sunken = QFrame.Sunken
-    Qt.AlignmentFlag.AlignCenter = Qt.AlignCenter
-    Qt.AlignmentFlag.AlignRight = Qt.AlignRight
-    Qt.AlignmentFlag.AlignTop = Qt.AlignTop
-    Qt.AlignmentFlag.AlignLeft = Qt.AlignLeft
-    Qt.MouseButton.LeftButton = Qt.LeftButton
-    Qt.KeyboardModifier.ControlModifier = Qt.ControlModifier
 
 
 def get_text_color() -> str:
@@ -72,7 +59,7 @@ class SingerTile(QFrame):
         self.position = None
         self._selected = False
         self.setFixedSize(120, 60)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.StyledPanel)
         self.setFrameShadow(QFrame.Raised)
         self._bg = voice_group_color(singer.voice_group)
         self.setStyleSheet(f"background-color: {self._bg}; border: 1px solid #888; border-radius: 4px;")
@@ -92,20 +79,20 @@ class SingerTile(QFrame):
         
         name_with_affinity = f"{self.singer.name} 👥" if self.singer.affinity else self.singer.name
         n = QLabel(f"<b>{name_with_affinity}</b>")
-        n.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        n.setAlignment(Qt.AlignCenter)
         n.setWordWrap(True)
         n.setStyleSheet(f"background: transparent; color: {txt_color}; font-size: 9pt;")
         lay.addWidget(n)
         
         vg = self.singer.voice_group.value if hasattr(self.singer.voice_group, 'value') else str(self.singer.voice_group)
         v = QLabel(vg)
-        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.setAlignment(Qt.AlignCenter)
         v.setStyleSheet(f"background: transparent; color: {sec_color}; font-size: 8pt;")
         lay.addWidget(v)
         
         if self.singer.height > 0:
             h = QLabel(f"{self.singer.height} cm")
-            h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            h.setAlignment(Qt.AlignCenter)
             h.setStyleSheet(f"background: transparent; color: {sec_color}; font-size: 7pt;")
             lay.addWidget(h)
         
@@ -113,7 +100,7 @@ class SingerTile(QFrame):
         btn.setFixedSize(14, 14)
         btn.setStyleSheet("font-size: 10pt; padding: 0; background: transparent; border: none;")
         btn.clicked.connect(self.on_remove)
-        lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(btn, alignment=Qt.AlignRight | Qt.AlignTop)
     
     def _setup_shadow(self):
         shadow = QGraphicsDropShadowEffect(self)
@@ -156,10 +143,10 @@ class SingerTile(QFrame):
         self.style().polish(self)
     
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
+        if e.button() == Qt.LeftButton:
             from PyQt6.QtWidgets import QApplication
             modifiers = QApplication.keyboardModifiers()
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if modifiers & Qt.ControlModifier:
                 e.ignore()
                 return
 
@@ -171,7 +158,7 @@ class SingerTile(QFrame):
             self._drag_start_pos = e.globalPos()
     
     def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.MouseButton.LeftButton and hasattr(self, '_drag_start_pos'):
+        if e.buttons() & Qt.LeftButton and hasattr(self, '_drag_start_pos'):
             from PyQt6.QtWidgets import QApplication
             if (e.globalPos() - self._drag_start_pos).manhattanLength() > QApplication.startDragDistance():
                 drag = QDrag(self)
@@ -231,8 +218,6 @@ class FormationGrid(QWidget):
         self.undo_stack = None  # Set by MainWindow
         
         self.setAcceptDrops(True)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_grid_context_menu)
         self.setMinimumSize(
             self.cols * self.CELL_WIDTH + self.MARGIN_LEFT + 50,
             self.rows * self.CELL_HEIGHT + self.MARGIN_TOP + 50
@@ -315,7 +300,7 @@ class FormationGrid(QWidget):
                 self._restore_tile_style(tile)
     
     def mousePressEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton:
+        if e.button() != Qt.LeftButton:
             return super().mousePressEvent(e)
 
         widget = self.childAt(e.pos())
@@ -324,7 +309,7 @@ class FormationGrid(QWidget):
             from PyQt6.QtWidgets import QApplication
             modifiers = QApplication.keyboardModifiers()
 
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if modifiers & Qt.ControlModifier:
                 if sid in self.selected_ids:
                     self.selected_ids.discard(sid)
                 else:
@@ -377,17 +362,17 @@ class FormationGrid(QWidget):
 
     def refresh_grid(self):
         for tile in list(self.tiles.values()):
-            tile.removeEventFilter(self)
-            tile.removed.disconnect()
-            tile.edit_requested.disconnect()
-            tile.affinity_requested.disconnect()
             tile.deleteLater()
         self.tiles.clear()
-
-        for child in list(self.children()):
-            if isinstance(child, QFrame) and getattr(child, '_is_grid_cell', False):
-                child.deleteLater()
-
+        
+        for label in list(self.findChildren(QLabel)):
+            if label.text().startswith("Reihe "):
+                label.deleteLater()
+        
+        for cell in list(self.findChildren(QFrame)):
+            if hasattr(cell, '_is_grid_cell'):
+                cell.deleteLater()
+        
         for r in range(self.rows):
             for c in range(self.cols):
                 cell = QFrame(self)
@@ -397,8 +382,8 @@ class FormationGrid(QWidget):
                     x += self.OFFSET
                 y = self.MARGIN_TOP + r * self.CELL_HEIGHT
                 cell.setGeometry(x, y, self.CELL_WIDTH - 5, self.CELL_HEIGHT - 5)
-                cell.setFrameShape(QFrame.Shape.Panel)
-                cell.setFrameShadow(QFrame.Shadow.Sunken)
+                cell.setFrameShape(QFrame.Panel)
+                cell.setFrameShadow(QFrame.Sunken)
                 cell.setStyleSheet("""
                     background-color: rgba(255,255,255, 0.65);
                     border: 1px solid #d4c9b8;
@@ -406,7 +391,7 @@ class FormationGrid(QWidget):
                 """)
                 cell.lower()
                 cell.show()
-
+        
         for singer in self.singers:
             if singer.row >= 0 and singer.col >= 0:
                 tile = SingerTile(singer)
@@ -414,18 +399,18 @@ class FormationGrid(QWidget):
                 tile.removed.connect(self.on_tile_removed)
                 tile.edit_requested.connect(self.on_tile_edit_requested)
                 tile.affinity_requested.connect(self.on_tile_affinity_requested)
-
+                
                 x = self.MARGIN_LEFT + singer.col * self.CELL_WIDTH
                 if self.staggered and singer.row % 2 == 1:
                     x += self.OFFSET
                 y = self.MARGIN_TOP + singer.row * self.CELL_HEIGHT
-
+                
                 tile.setParent(self)
                 tile.move(x, y)
                 tile.show()
                 tile.installEventFilter(self)
                 self.tiles[singer.singer_id] = tile
-
+        
         self.update_selection_visuals()
         self.update()
         self.updateGeometry()
@@ -485,108 +470,179 @@ class FormationGrid(QWidget):
     # --- Auto-arrange methods ---
     
     def auto_arrange_by_height(self):
-        from core.arrangement import arrange_by_height, apply_placements
         if not self.singers:
             return
-        placements = arrange_by_height(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
+        sorted_singers = sorted(
+            self.singers,
+            key=lambda s: (-s.height, (s.voice_group.value if hasattr(s.voice_group, 'value') else str(s.voice_group)), s.name)
+        )
+        placed_ids = set()
+        idx = 0
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if idx < len(sorted_singers):
+                    s = sorted_singers[idx]
+                    s.row = r
+                    s.col = c
+                    placed_ids.add(s.singer_id)
+                    idx += 1
+                else:
+                    break
+        for s in self.singers:
+            if s.singer_id not in placed_ids:
+                s.row = -1
+                s.col = -1
         self.refresh_grid()
     
     def auto_arrange_men_outer(self):
-        from core.arrangement import arrange_men_outer, apply_placements
         if not self.singers:
             return
-        placements = arrange_men_outer(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
+        def get_vg(vg):
+            return vg.value if hasattr(vg, 'value') else str(vg)
+        basses = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
+        tenors = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
+        others = [s for s in self.singers if s not in basses and s not in tenors]
+        basses.sort(key=lambda s: (get_vg(s.voice_group), s.name))
+        tenors.sort(key=lambda s: (get_vg(s.voice_group), s.name))
+        others.sort(key=lambda s: (get_vg(s.voice_group), s.name))
+        placed_ids = set()
+        idx = 0
+        for s in basses[:len(basses)//2]:
+            s.row = idx % self.rows
+            s.col = 0
+            placed_ids.add(s.singer_id)
+            idx += 1
+        for s in tenors[:len(tenors)//2]:
+            s.row = idx % self.rows
+            s.col = 1
+            placed_ids.add(s.singer_id)
+            idx += 1
+        for s in basses[len(basses)//2:]:
+            s.row = idx % self.rows
+            s.col = self.cols - 1
+            placed_ids.add(s.singer_id)
+            idx += 1
+        for s in tenors[len(tenors)//2:]:
+            s.row = idx % self.rows
+            s.col = self.cols - 2
+            placed_ids.add(s.singer_id)
+            idx += 1
+        mid_col_start = 2
+        mid_col_end = self.cols - 3
+        for s in others:
+            s.row = idx % self.rows
+            s.col = mid_col_start + (idx % (mid_col_end - mid_col_start + 1))
+            placed_ids.add(s.singer_id)
+            idx += 1
+        for s in self.singers:
+            if s.singer_id not in placed_ids:
+                s.row = -1
+                s.col = -1
         self.refresh_grid()
     
     def auto_arrange_satb(self):
-        from core.arrangement import arrange_satb, apply_placements
         if not self.singers:
             return
-        placements = arrange_satb(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
+        def get_vg(vg):
+            return vg.value if hasattr(vg, 'value') else str(vg)
+        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
+        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
+        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
+        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
+        sopran.sort(key=lambda s: s.name)
+        alt.sort(key=lambda s: s.name)
+        tenor.sort(key=lambda s: s.name)
+        bass.sort(key=lambda s: s.name)
+        ordered = sopran + alt + tenor + bass
+        placed_ids = set()
+        idx = 0
+        for col in range(self.cols):
+            for row in range(self.rows):
+                if idx < len(ordered):
+                    s = ordered[idx]
+                    s.row = row
+                    s.col = col
+                    placed_ids.add(s.singer_id)
+                    idx += 1
+                else:
+                    break
+        for s in self.singers:
+            if s.singer_id not in placed_ids:
+                s.row = -1
+                s.col = -1
         self.refresh_grid()
     
     def auto_arrange_sbta(self):
-        from core.arrangement import arrange_sbta, apply_placements
         if not self.singers:
             return
-        placements = arrange_sbta(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
+        def get_vg(vg):
+            return vg.value if hasattr(vg, 'value') else str(vg)
+        sopran = [s for s in self.singers if "Sopran" in get_vg(s.voice_group)]
+        alt = [s for s in self.singers if "Alt" in get_vg(s.voice_group)]
+        tenor = [s for s in self.singers if "Tenor" in get_vg(s.voice_group)]
+        bass = [s for s in self.singers if "Bass" in get_vg(s.voice_group)]
+        sopran.sort(key=lambda s: s.name)
+        alt.sort(key=lambda s: s.name)
+        tenor.sort(key=lambda s: s.name)
+        bass.sort(key=lambda s: s.name)
+        ordered = sopran + bass + tenor + alt
+        placed_ids = set()
+        idx = 0
+        for col in range(self.cols):
+            for row in range(self.rows):
+                if idx < len(ordered):
+                    s = ordered[idx]
+                    s.row = row
+                    s.col = col
+                    placed_ids.add(s.singer_id)
+                    idx += 1
+                else:
+                    break
+        for s in self.singers:
+            if s.singer_id not in placed_ids:
+                s.row = -1
+                s.col = -1
         self.refresh_grid()
     
     def auto_arrange_s1s2b2b1t2t1a2a1(self):
-        from core.arrangement import arrange_s1s2b2b1t2t1a2a1, apply_placements
         if not self.singers:
             return
-        placements = arrange_s1s2b2b1t2t1a2a1(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
+        def get_vg(vg):
+            return vg.value if hasattr(vg, 'value') else str(vg)
+        s1 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 1"]
+        s2 = [s for s in self.singers if get_vg(s.voice_group) == "Sopran 2"]
+        b2 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 2"]
+        b1 = [s for s in self.singers if get_vg(s.voice_group) == "Bass 1"]
+        t2 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 2"]
+        t1 = [s for s in self.singers if get_vg(s.voice_group) == "Tenor 1"]
+        a2 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 2"]
+        a1 = [s for s in self.singers if get_vg(s.voice_group) == "Alt 1"]
+        s1.sort(key=lambda s: s.name)
+        s2.sort(key=lambda s: s.name)
+        b2.sort(key=lambda s: s.name)
+        b1.sort(key=lambda s: s.name)
+        t2.sort(key=lambda s: s.name)
+        t1.sort(key=lambda s: s.name)
+        a2.sort(key=lambda s: s.name)
+        a1.sort(key=lambda s: s.name)
+        ordered = s1 + s2 + b2 + b1 + t2 + t1 + a2 + a1
+        placed_ids = set()
+        idx = 0
+        for col in range(self.cols):
+            for row in range(self.rows):
+                if idx < len(ordered):
+                    s = ordered[idx]
+                    s.row = row
+                    s.col = col
+                    placed_ids.add(s.singer_id)
+                    idx += 1
+                else:
+                    break
+        for s in self.singers:
+            if s.singer_id not in placed_ids:
+                s.row = -1
+                s.col = -1
         self.refresh_grid()
-
-    def auto_arrange_s1s2a1a2t1t2b1b2(self):
-        from core.arrangement import arrange_s1s2a1a2t1t2b1b2, apply_placements
-        if not self.singers:
-            return
-        placements = arrange_s1s2a1a2t1t2b1b2(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
-        self.refresh_grid()
-
-    def auto_arrange_s1s2b1b2t1t2a1a2(self):
-        from core.arrangement import arrange_s1s2b1b2t1t2a1a2, apply_placements
-        if not self.singers:
-            return
-        placements = arrange_s1s2b1b2t1t2a1a2(self.singers, self.rows, self.cols)
-        apply_placements(self.singers, placements)
-        self.refresh_grid()
-
-    def apply_affinity_proximity(self, singer):
-        if not singer.affinity:
-            return False
-        partner = next((s for s in self.singers if s.singer_id == singer.affinity), None)
-        if not partner or partner.row < 0 or singer.row < 0:
-            return False
-        if singer.row != partner.row:
-            return False
-        if abs(singer.col - partner.col) == 1:
-            return False
-        target_col = singer.col + 1 if singer.col < partner.col else singer.col - 1
-        if target_col < 0 or target_col >= self.cols:
-            return False
-        occupant = next((s for s in self.singers if s.row == singer.row and s.col == target_col), None)
-        if occupant and occupant.singer_id != partner.singer_id:
-            old_row, old_col = partner.row, partner.col
-            partner.row, partner.col = occupant.row, occupant.col
-            occupant.row, occupant.col = old_row, old_col
-        elif not occupant:
-            partner.row, partner.col = singer.row, target_col
-        self.refresh_grid()
-        return True
-
-    def show_grid_context_menu(self, pos):
-        from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self)
-        if len(self.selected_ids) == 1:
-            sid = list(self.selected_ids)[0]
-            singer = next((s for s in self.singers if s.singer_id == sid), None)
-            if singer and singer.affinity:
-                partner = next((s for s in self.singers if s.singer_id == singer.affinity), None)
-                if partner and partner.row >= 0 and singer.row >= 0:
-                    affinity_action = menu.addAction(f" Nähe: {singer.name} → {partner.name} platzieren")
-                    affinity_action.triggered.connect(lambda: self.apply_affinity_proximity(singer))
-                    menu.addSeparator()
-        if len(self.selected_ids) == 2:
-            swap_action = menu.addAction("Positionen tauschen")
-            swap_action.triggered.connect(self.swap_selected_singers)
-            menu.addSeparator()
-        if self.undo_stack:
-            undo_action = menu.addAction("Rückgängig")
-            undo_action.setEnabled(self.undo_stack.canUndo())
-            undo_action.triggered.connect(self.undo_stack.undo)
-            redo_action = menu.addAction("Wiederholen")
-            redo_action.setEnabled(self.undo_stack.canRedo())
-            redo_action.triggered.connect(self.undo_stack.redo)
-        menu.exec(self.mapToGlobal(pos))
     
     def optimize(self, primary_rule=None, refinement_rules=None):
         """Run optimizer with given rules."""
@@ -682,7 +738,7 @@ class FormationGrid(QWidget):
     
     def _move_group(self, group_ids, delta_col, delta_row):
         """Verschiebt eine Gruppe von Sängern."""
-        from core.commands import QtMoveGroupCommand as MoveGroupCommand
+        from core.commands import MoveGroupCommand
         command = MoveGroupCommand(group_ids, delta_col, delta_row, self)
         if self.undo_stack:
             self.undo_stack.push(command)
@@ -691,7 +747,7 @@ class FormationGrid(QWidget):
     
     def _move_singer(self, singer, old_row, old_col, new_row, new_col):
         """Verschiebt einen einzelnen Sänger."""
-        from core.commands import QtMoveSingerCommand as MoveSingerCommand
+        from core.commands import MoveSingerCommand
         command = MoveSingerCommand(singer, old_row, old_col, new_row, new_col, self)
         if self.undo_stack:
             self.undo_stack.push(command)
@@ -711,7 +767,7 @@ class FormationGrid(QWidget):
         if not singer1 or not singer2:
             return
 
-        from core.commands import QtSwapSingersCommand as SwapSingersCommand
+        from core.commands import SwapSingersCommand
         command = SwapSingersCommand(singer1, singer2, self)
         if self.undo_stack:
             self.undo_stack.push(command)

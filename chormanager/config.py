@@ -1,11 +1,41 @@
 """Configuration management for ChorManager."""
 
+import logging
+import os
 import yaml
 import json
 from pathlib import Path
 from functools import lru_cache
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+# m8-FIX-A: get a module-level logger for YAML loaders.
+_logger = logging.getLogger(__name__)
+
+
+def _safe_yaml_load(config_path: Path, default: object) -> object:
+    """Load ``config_path`` as YAML; return ``default`` on any failure.
+
+    Covers:
+        * ``OSError`` / ``FileNotFoundError`` (missing or unreadable file)
+        * ``yaml.YAMLError`` (malformed YAML of any subtype)
+    Always logs a warning so misconfiguration is visible.
+    """
+    if not config_path.exists():
+        _logger.warning(
+            "Config file %s does not exist; falling back to default %r",
+            config_path, default,
+        )
+        return default
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or default
+    except (OSError, yaml.YAMLError) as exc:
+        _logger.warning(
+            "Failed to parse YAML %s (%s: %s); falling back to default %r",
+            config_path, type(exc).__name__, exc, default,
+        )
+        return default
 
 
 def get_state_file():
@@ -32,13 +62,31 @@ def load_state():
 
 def save_state(state: dict):
     """Save application state to JSON file.
-    
+
+    M-4 Fix: Atomic write via tmp + os.replace, damit ``state.json``
+    bei einem Crash waehrend des Schreibens nicht korrupt wird.
+    ``state.json`` enthaelt last_active_project_id / event_id /
+    besetzung_id und theme -- ein Korruptionsverlust wuerde den
+    User-Zustand (welches Projekt war aktiv?) zerschlagen.
+
     Args:
         state: State dictionary to save.
     """
     state_file = get_state_file()
-    with open(state_file, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    tmp_file = str(state_file) + ".tmp"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, state_file)
+    except Exception:
+        # Bei Crash bleibt state.json (alter Stand) unangetastet;
+        # die .tmp-Datei wird beim naechsten erfolgreichen Save ueberschrieben.
+        try:
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except OSError:
+            pass
+        raise
 
 
 def get_last_active_project_id():
@@ -131,86 +179,63 @@ def get_data_dir() -> Path:
 
 
 @lru_cache(maxsize=1)
-def _load_voice_groups_raw():
-    """Load raw voice groups from YAML."""
-    config_file = CONFIG_DIR / "voice_groups.yaml"
-    try:
-        with open(config_file, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (FileNotFoundError, yaml.YAMLError):
-        return []
-    groups = data.get("voice_groups", []) if data else []
-    return sorted(groups, key=lambda g: g.get("order", 0))
-
-
 def load_voice_groups():
     """Load voice groups from YAML configuration.
+    
+    The result is cached for the lifetime of the process. The cache
+    can be invalidated by calling ``load_voice_groups.cache_clear()``,
+    e.g. after the YAML file is edited at runtime.
     
     Returns:
         list: List of voice group dictionaries sorted by order.
     """
-    return _load_voice_groups_raw()
+    config_file = CONFIG_DIR / "voice_groups.yaml"
+    data = _safe_yaml_load(config_file, default={"voice_groups": []})
+    if not isinstance(data, dict):
+        data = {"voice_groups": []}
+    groups = data.get("voice_groups", []) or []
+    return sorted(groups, key=lambda g: g.get("order", 0))
 
 
 @lru_cache(maxsize=1)
-def _load_fields_raw():
-    """Load raw field definitions from YAML."""
-    config_file = CONFIG_DIR / "fields.yaml"
-    try:
-        with open(config_file, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (FileNotFoundError, yaml.YAMLError):
-        return []
-    fields = data.get("fields", []) if data else []
-    return sorted(fields, key=lambda f: f.get("order", 0))
-
-
 def load_fields():
     """Load field definitions from YAML configuration.
+    
+    Cached for the lifetime of the process; invalidate via
+    ``load_fields.cache_clear()`` after the YAML file is edited.
     
     Returns:
         list: List of field dictionaries sorted by order.
     """
-    return _load_fields_raw()
+    config_file = CONFIG_DIR / "fields.yaml"
+    data = _safe_yaml_load(config_file, default={"fields": []})
+    if not isinstance(data, dict):
+        data = {"fields": []}
+    fields = data.get("fields", []) or []
+    return sorted(fields, key=lambda f: f.get("order", 0))
 
 
 @lru_cache(maxsize=1)
-def _load_app_config_raw():
-    """Load raw application configuration from YAML."""
-    config_file = CONFIG_DIR / "app.yaml"
-    try:
-        with open(config_file, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError):
-        config = {}
-    
-    config.setdefault("database", {}).setdefault("filename", "chor.db")
-    config.setdefault("backup", {}).setdefault("enabled", True)
-    config.setdefault("backup", {}).setdefault("on_start", True)
-    config.setdefault("backup", {}).setdefault("before_save", True)
-    config.setdefault("backup", {}).setdefault("max_backups", 10)
-    config.setdefault("logging", {}).setdefault("enabled", True)
-    config.setdefault("logging", {}).setdefault("level", "INFO")
-    
-    return config
-
-
 def load_app_config():
     """Load application configuration from YAML.
+    
+    Cached for the lifetime of the process; invalidate via
+    ``load_app_config.cache_clear()`` after the YAML file is edited.
     
     Returns:
         dict: Application configuration dictionary.
     """
-    return _load_app_config_raw()
-
-
-def reload_config():
-    """Clear config cache and reload from disk."""
-    _load_voice_groups_raw.cache_clear()
-    _load_fields_raw.cache_clear()
-    _load_app_config_raw.cache_clear()
-    
-    return load_app_config()
+    config_file = CONFIG_DIR / "app.yaml"
+    data = _safe_yaml_load(config_file, default={}) or {}
+    # If YAML parsed successfully but returned a scalar (e.g. a stray string),
+    # fall back to an empty dict instead of letting callers see ``str``.
+    if not isinstance(data, dict):
+        _logger.warning(
+            "Config %s did not contain a mapping; falling back to empty dict",
+            config_file,
+        )
+        data = {}
+    return data
 
 
 def get_voice_group_choices():

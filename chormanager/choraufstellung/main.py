@@ -1,50 +1,201 @@
+"""ChorAufstellung :class:`MainWindow` (M-2 finale).
+
+This module is the *thin* application shell for the ChorAufstellung
+sub-app. The bulk of the logic that used to live here has been
+extracted into dedicated modules; the table below maps each of the
+twelve M-2 refactoring steps to its new home:
+
+* :class:`qt_compat`     - cross-PyQt5/PyQt6 helpers + fallbacks
+* :class:`undo_bridge`  - thin QObject wrapper around the pure-Python
+                          undo stack in :mod:`core.commands`
+* :class:`widgets.draggable_list` - DraggableList/Table (Schritt 2)
+* :class:`core.commands` - MoveSinger / SwapSingers / MoveGroup
+                          commands + UndoStack (Schritt 3)
+* :class:`widgets.dialogs` - AddSinger / Affinity / VoicingConfig
+                             dialogs (Schritt 4)
+* :class:`widgets.singer_tile`   - SingerTile (Schritt 5)
+* :class:`widgets.singer_pool`   - SingerPool (Schritt 5)
+* :class:`widgets.formation_grid` - FormationGrid (Schritt 6)
+* :class:`autosave.AutoSaveController` (Schritt 7)
+* :class:`file_io.FormationFileIO`     (Schritt 8)
+* :class:`pdf_export_integration.PDFExportBridge` (Schritt 9)
+* :class:`chormanager_bridge.ChorManagerBridge`   (Schritt 10)
+* :class:`recovery.RecoveryController`  (Schritt 11)
+* :class:`theme.ThemeApplier`          (Schritt 12)
+* :class:`main_menu.MainMenuBuilder`   (Schritt 13)
+
+The :class:`MainWindow` class in this file is now a thin shell that
+wires the controllers together and owns the user-facing dialogs and
+the close-event handler. See :mod:`plans/2026-06-12_m2_choraufstellung_refactor`
+for the full refactoring plan.
+
+Backward compatibility
+----------------------
+This module re-exports the extracted class names so callers that did
+``from chormanager.choraufstellung.main import <X>`` keep working.
+"""
+from __future__ import annotations
+
 import sys
 import os
+import json
 
-from PyQt6.QtWidgets import (
+# PyQt5/PyQt6 cross-compatibility, enum aliases (QFrame.Panel, Qt.AlignCenter)
+# and fallback classes (FallbackSinger, FallbackOptimizerDialog, FallbackGridEngine)
+# all live in ``qt_compat``. ``main.py`` no longer needs a try/except block
+# for any of those concerns.
+from qt_compat import (
+    # Cross-compat helper
+    exec_qt,
+    QT_VERSION,
+    # Re-exported Qt classes used below
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QComboBox,
-    QScrollArea, QMessageBox, QSplitter, QRadioButton
+    QGridLayout, QLabel, QPushButton, QMenuBar, QMenu,
+    QFileDialog, QDialog, QFormLayout, QLineEdit, QComboBox, QListWidget,
+    QListWidgetItem, QScrollArea, QMessageBox, QFrame, QCheckBox, QSplitter,
+    QGraphicsDropShadowEffect, QRubberBand,
+    QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
+    QRadioButton,
+    Qt, QMimeData, pyqtSignal, QRect, QTimer, QPoint,
+    QPrinter, QPrintDialog,
+    QDrag, QColor, QPalette, QFont, QAction, QActionGroup,
+    # NOTE (M-2 Schritt 3): QUndoStack / QUndoCommand removed from
+    # the qt_compat re-export.  Undo/redo now lives in the
+    # pure-Python ``core.commands`` module, with a thin Qt-signal
+    # bridge in ``undo_bridge.QtUndoStack`` imported below.
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThreadPool
-from PyQt6.QtGui import QUndoStack
 
-try:
-    from config import load_settings, get_valid_voice_groups
-except ImportError:
-    def load_settings(): return {"theme": "standard"}
-    def get_valid_voice_groups(): return []
+# M-2 Schritt 3: undo/redo logic now lives in the Qt-agnostic
+# ``core.commands`` module.  ``undo_bridge.QtUndoStack`` is a thin
+# QObject wrapper that exposes the same ``canUndo()`` / ``canRedo()``
+# / ``canUndoChanged`` / ``canRedoChanged`` API the rest of main.py
+# already uses.
+#
+# These imports are sibling-module imports (no leading
+# ``chormanager.``) on purpose: the choraufstellung subshell launches
+# this file as ``__main__`` with only the choraufstellung directory
+# on ``sys.path``.  In that mode an absolute
+# ``from chormanager.choraufstellung.undo_bridge import …`` raises
+# ``ModuleNotFoundError: No module named 'chormanager'`` — the same
+# trap M-2 Schritt 2 hit for ``widgets.draggable_list``.
+from undo_bridge import QtUndoStack
+from autosave import AutoSaveController
+from file_io import FormationFileIO
+from pdf_export_integration import PDFExportBridge
+from chormanager_bridge import ChorManagerBridge
+from recovery import RecoveryController
+from theme import ThemeApplier
+from main_menu import MainMenuBuilder
+from core.commands import (
+    MoveSingerCommand,
+    SwapSingersCommand,
+    MoveGroupCommand,
+)
 
-try:
-    from singer_model import Singer, VoiceGroup, voice_group_color
-    from storage import FormationStorage
-    from pdf_export import PDFExporter
-    from core.grid_engine import GridEngine, GridConfig
-    from ui.dialogs import VoicingConfigDialog
-    from ui.theme_manager import apply_theme, build_legend
-    from ui.menu_builder import build_menu
-    from services.formation_file_service import FormationFileService
-    from services.formation_loader import FormationLoader
-except ImportError:
-    from enum import Enum
-    class VoiceGroup(Enum):
-        SOPRAN_1 = "Sopran 1"
-    def voice_group_color(vg): return "#cccccc"
-    class Singer:
-        def __init__(self, name, voice_group, height=0, singer_id="1"):
-            self.name, self.voice_group, self.height, self.singer_id = name, voice_group, height, singer_id
-    class FormationStorage:
-        def load_formation(self, f): return None
-        def save_formation(self, *a): return True
-    class PDFExporter:
-        def export_formation(self, *a): return True
-    class GridEngine:
-        def __init__(self, *a): pass
-    class VoicingConfigDialog:
-        pass
+# Domain modules (choraufstellung-specific). These were previously inside
+# a try/except block, but every module listed here is a hard dependency
+# of the choraufstellung subapp, so a plain import is fine and clearer.
+from config import (
+    load_settings, save_settings, load_voice_groups_config,
+    get_valid_voice_groups, get_voice_group_color, get_data_dir,
+    clear_color_cache,
+)
+from singer_model import Singer, VoiceGroup, voice_group_color
+from storage import FormationStorage
+from pdf_export import PDFExporter
+from core.optimizer import FormationOptimizer
+from core.grid_engine import GridEngine, GridConfig
+from ui.optimizer_dialog import OptimizerDialog
 
-from ui.pool_widget import SingerPool
-from ui.grid_widget import FormationGrid, SingerTile
+# M-2 Schritt 2: Draggable widgets were extracted from this file (formerly
+# Z. 42-78) into ``widgets/draggable_list.py``. The two local names are
+# re-exported here for backward compatibility with any external caller
+# that did ``from chormanager.choraufstellung.main import DraggableListWidget``.
+#
+# The choraufstellung subshell is launched as a standalone script
+# (``python __main__.py`` from inside the choraufstellung directory,
+# see ``choraufstellung_launcher.py``) — in that mode the top-level
+# ``chormanager`` package is NOT on ``sys.path``, so an absolute
+# ``from chormanager.choraufstellung.widgets...`` import fails with
+# ``ModuleNotFoundError: No module named 'chormanager'``.  We must
+# therefore use the relative import.  In test/package-import mode
+# (``chormanager.choraufstellung.main``) the relative import still
+# works because the package's parent directory is on ``sys.path``.
+from widgets.draggable_list import (
+    DraggableListWidget,
+    DraggableTableWidget,
+)
+
+# M-2 Schritt 5: ``SingerTile`` was extracted from this file (formerly
+# Z. 84-208) into ``widgets/singer_tile.py``.  The class name is
+# re-exported from that module below so any external caller that did
+# ``from choraufstellung.main import SingerTile`` keeps working.
+#
+# Note: ``SingerTile`` references ``FormationGrid`` via a runtime
+# ``isinstance`` check (forward-declared via TYPE_CHECKING in the
+# new module).  The class therefore does NOT need to be imported
+# into this file at all — but we keep the re-export so old call
+# sites keep working.
+from widgets.singer_tile import SingerTile  # noqa: F401
+
+# M-2 Schritt 3: The local ``MoveSingerCommand`` / ``SwapSingersCommand``
+# / ``MoveGroupCommand`` classes that used to live here were deleted.
+# The active implementations now live in the pure-Python
+# ``core.commands`` module and are imported at the top of this file
+# (see the ``from core.commands import …`` block).
+#
+# The three class names are re-exported from this module so any
+# external caller that did
+# ``from chormanager.choraufstellung.main import MoveSingerCommand``
+# keeps working — they just get the new core.commands class now.
+#
+# (No code is needed here; the import at the top of the file
+# already binds the names into this module's namespace.)
+
+
+
+# M-2 Schritt 6: FormationGrid was extracted from this file
+# (formerly Z. 110-848, ~739 LOC) into
+# ``widgets/formation_grid.py``.  The class name is re-exported
+# from that module so external callers that did
+# ``from choraufstellung.main import FormationGrid`` keep working.
+from widgets.formation_grid import FormationGrid  # noqa: F401
+
+# M-2 Schritt 5: SingerPool was extracted from this file (formerly
+# Z. ~857-1092) into widgets/singer_pool.py. The class name is
+# re-exported from that module below so any external caller that did
+# from choraufstellung.main import SingerPool keeps working.
+from widgets.singer_pool import SingerPool  # noqa: F401
+
+
+# M-2 Schritt 4: AddSingerDialog / AffinityDialog / VoicingConfigDialog
+# were extracted from this file (formerly Z. 1207-1327) into
+# ``widgets/dialogs.py``.  The three class names are re-exported from
+# that module below so any external caller that did
+# ``from choraufstellung.main import AddSingerDialog`` (etc.) keeps
+# working unchanged.
+from widgets.dialogs import (
+    AddSingerDialog,
+    AffinityDialog,
+    VoicingConfigDialog,
+)
+
+
+__all__ = [
+    # Re-exports (back-compat for ``from chormanager.choraufstellung.main import X``)
+    "DraggableListWidget",
+    "DraggableTableWidget",
+    "SingerTile",
+    "SingerPool",
+    "FormationGrid",
+    "AddSingerDialog",
+    "AffinityDialog",
+    "VoicingConfigDialog",
+    # The main class
+    "MainWindow",
+    # The CLI entry point
+    "main",
+]
 
 
 class MainWindow(QMainWindow):
@@ -67,41 +218,117 @@ class MainWindow(QMainWindow):
         
         self.engine = GridEngine(GridConfig(rows=4, cols=5, staggered=False))
         
-        self.is_modified = False
+        self._is_modified = False
         self.last_manual_save_mtime = 0
-        self.file_service = FormationFileService(self)
-        self.formation_loader = FormationLoader(self)
         self._loaded_metadata = {
             "project": project_name or "",
             "event": event_name or "",
             "event_date": event_date or "",
             "event_type": event_type or ""
         }
-        self.autosave_timer = QTimer(self)
-        self.autosave_timer.timeout.connect(self.file_service.autosave_check)
-        self.autosave_timer.start(120000)
+        # M-2 Schritt 7: autosave timer / save-decision moved to
+        # ``AutoSaveController``.  The window only exposes the three
+        # protocol methods the controller needs (is_modified / has_file
+        # / build_data) and owns the source-of-truth flags
+        # (``is_modified``, ``file``).  ``self.autosave_timer`` is
+        # gone -- use ``self.autosave.timer`` if you ever need raw
+        # QTimer access.
+        self.autosave = AutoSaveController(
+            window=self,
+            storage=self.storage,
+            interval_ms=120_000,
+        )
 
-        self.threadpool = QThreadPool(self)
+        # File-IO bridge (M-2 Schritt 8): delegates new/open/save to
+        # the standalone FormationFileIO class. The window only owns
+        # the dialog-heavy bits (resize warning etc.); the storage
+        # round-trip and filename logic live in file_io.py.
+        self.file_io = FormationFileIO(self.storage)
 
+        # PDF-Export-Bridge (M-2 Schritt 9): encapsulates the dialog
+        # + write + result-feedback cycle.  The window only needs to
+        # pass itself; the bridge reads the grid / pdf / singers via
+        # duck typing.
+        self.pdf_bridge = PDFExportBridge(self)
+
+        # ChorManager-Bridge (M-2 Schritt 10): seeds the host with
+        # singers from the parent ChorManager app (temp JSON or DB).
+        self.cm_bridge = ChorManagerBridge(self)
+
+        # Recovery-Controller (M-2 Schritt 11): owns the autosave-vs-
+        # manual-save decision and the "Wiederherstellen?" dialog.
+        self.recovery = RecoveryController(self.storage, self)
+
+        # Theme-Applier (M-2 Schritt 12): owns the QSS strings + the
+        # post-apply refresh of grid and pool.
+        self.theme_applier = ThemeApplier(self)
+
+        self._finish_init()
+
+    # ------------------------------------------------------------------
+    # AutoSaveController protocol (M-2 Schritt 7)
+    # ------------------------------------------------------------------
+    #
+    # These three methods are the only contract the controller needs
+    # from the window.  They are duck-typed (the controller uses
+    # ``_AutoSaveWindow`` protocol) so we don't have to subclass
+    # or import MainWindow from autosave.py.
+
+    def is_modified(self) -> bool:
+        return self._is_modified
+
+    def has_file(self) -> bool:
+        return self.file is not None
+
+    def build_data(self) -> dict:
+        placed = self.grid.get_placed_singer_ids()
+        return {
+            "version": "1.0",
+            "rows": self.grid.rows,
+            "cols": self.grid.cols,
+            "staggered": self.grid.staggered,
+            "singers": [
+                {
+                    "name": s.name,
+                    "voice_group": s.voice_group.value if hasattr(s.voice_group, "value") else str(s.voice_group),
+                    "height": s.height,
+                    "singer_id": s.singer_id,
+                    "row": s.row,
+                    "col": s.col,
+                    "affinity": s.affinity,
+                }
+                for s in self.singers
+            ],
+            "placed": list(placed),
+        }
+
+    def _finish_init(self) -> None:
+        """Continue the constructor body.
+
+        These statements were stranded inside ``build_data`` after
+        an earlier botched refactor; M-2 Schritt 7 lifts them back
+        to a class-level helper so the constructor's actual
+        end-of-init sequence runs in a well-defined order.
+        """
         self.setup_ui()
-        self.resize(1100, 750)
-        
+        self.resize(1280, 768)
+
         if self.chormanager_mode:
-            self.formation_loader.load_from_chormanager()
+            self._load_from_chormanager()
         else:
-            self.file_service.check_recovery()
-        
+            self._check_recovery()
+
         settings = load_settings()
         current_theme = settings.get("theme", "light")
-        apply_theme(self, current_theme)
-        
+        self._apply_theme(current_theme)
+
         if current_theme == "dark":
             self.actionDark.setChecked(True)
         else:
             self.actionLight.setChecked(True)
 
     def setup_ui(self):
-        cen=QWidget(); self.setCentralWidget(cen); ml=QHBoxLayout(cen); sp=QSplitter(Qt.Orientation.Horizontal)
+        cen=QWidget(); self.setCentralWidget(cen); ml=QHBoxLayout(cen); sp=QSplitter(Qt.Horizontal)
         lp=QWidget(); ll=QVBoxLayout(lp); self.pool=SingerPool()
         self.pool.singer_selected.connect(self.add_to_grid); self.pool.singer_added.connect(self.add_to_grid)
         self.pool.singer_edit_requested.connect(self.edit_singer)
@@ -123,12 +350,45 @@ class MainWindow(QMainWindow):
         
         raster_layout = QHBoxLayout()
         raster_layout.addWidget(QLabel("Raster:"))
-        sc=QScrollArea(); sc.setWidgetResizable(False); self.grid=FormationGrid(4,5)
-        self.undo_stack = QUndoStack(self)
-        self.grid.set_undo_stack(self.undo_stack)
+        sc=QScrollArea(); sc.setWidgetResizable(False)
+        # M-2 bug-fix 2026-06-12: the QScrollArea must be told it can
+        # grow horizontally, otherwise the splitter's left side (pool)
+        # consumes all the resize-room and the grid stays stuck at
+        # ~5 columns. sizePolicy=Expanding/Preferred lets the right
+        # side claim leftover space when the user enlarges the window.
+        from PyQt6.QtWidgets import QSizePolicy
+        sc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # The viewport size is set once at construction and does not
+        # grow with the QScrollArea because setWidgetResizable(False).
+        # We install a resize listener that resizes the inner grid
+        # widget to match the viewport width, so that enlarging the
+        # MainWindow actually gives the grid more horizontal room.
+        # (The grid keeps its own minimum width via setMinimumSize in
+        # FormationGrid, so the scrollbar appears when the grid is
+        # wider than the viewport - which is the correct behavior for
+        # very wide formations like 2x16.)
+        def _resize_grid_to_viewport():
+            viewport_w = sc.viewport().width()
+            # The grid's natural width (cols * 130 + 80 + 50) is
+            # already its minimum; if the viewport is smaller we let
+            # the grid overflow (scrollbar appears). If the viewport
+            # is bigger we expand the grid so the columns fill the
+            # available space.
+            grid_w = max(self.grid.minimumWidth(), viewport_w)
+            self.grid.setFixedWidth(grid_w)
+        # Defer the first call until the scroll area is laid out.
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, _resize_grid_to_viewport)
+        sc.viewport().installEventFilter(self)
+        # Stash the resizer on the scroll area so we can call it from
+        # the eventFilter when the viewport size changes.
+        self._resize_grid_to_viewport = _resize_grid_to_viewport
+        self.grid=FormationGrid(4,5)
         self.grid.singer_removed_from_grid.connect(self.on_singer_removed_from_grid); self.grid.singer_edit_requested.connect(self.edit_singer); self.grid.singer_affinity_requested.connect(self.set_singer_affinity)
-        self.undo_stack.canUndoChanged.connect(self.update_undo_redo)
-        self.undo_stack.canRedoChanged.connect(self.update_undo_redo)
+        self.grid.undo_stack.canUndoChanged.connect(self.update_undo_redo)
+        self.grid.undo_stack.canRedoChanged.connect(self.update_undo_redo)
         self.grid.selection_changed.connect(self.update_swap_action)
         sc.setWidget(self.grid); rl.addWidget(sc)
         self.std_radio = QRadioButton("Standard")
@@ -142,11 +402,46 @@ class MainWindow(QMainWindow):
         raster_layout.addStretch()
         rl.addLayout(raster_layout)
         sr=QHBoxLayout(); sr.addWidget(QLabel("Suche:")); self.search_input=QLineEdit(); self.search_input.setPlaceholderText("Sänger-Name..."); self.search_input.returnPressed.connect(self.do_quick_search); sr.addWidget(self.search_input); sb=QPushButton("🔍"); sb.setFixedWidth(30); sb.clicked.connect(self.do_quick_search); sr.addWidget(sb); rl.addLayout(sr)
-        self.leg=QWidget(); self.llay=QHBoxLayout(self.leg); rl.addWidget(self.leg); build_legend(self.cfg, self.llay)
-        sp.addWidget(rp); sp.setSizes([250,800]); ml.addWidget(sp); build_menu(self)
+        self.leg=QWidget(); self.llay=QHBoxLayout(self.leg); rl.addWidget(self.leg); self.upd_leg()
+        sp.addWidget(rp)
+        # M-2 bug-fix 2026-06-12: the splitter must grow with the
+        # MainWindow. Without the size-policy + stretch factors below,
+        # it stays at its Preferred size (~640x480) even when the user
+        # enlarges the window to 2500x900. The result: the grid's
+        # QScrollArea is stuck at ~5 columns.
+        from PyQt6.QtWidgets import QSizePolicy
+        sp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        sp.setSizes([250, 800])
+        sp.setStretchFactor(0, 0)  # pool: keeps its initial 250 px
+        sp.setStretchFactor(1, 1)  # grid: takes the leftover space
+        # Stretch=1 in addWidget tells the surrounding QHBoxLayout
+        # to give the splitter all leftover space when the window grows.
+        ml.addWidget(sp, 1); self.menu()
         self.pool.placed_singer_ids = set()
         self.pool.singers = self.singers
         self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
+
+    def eventFilter(self, obj, event):
+        """Resize the inner grid when the QScrollArea viewport changes size.
+
+        This is the M-2 2026-06-12 follow-up to the resize-bug fix.
+        Without it the grid stays at its construction-time size even
+        when the user enlarges the MainWindow.
+        """
+        from PyQt6.QtCore import QEvent
+        if event.type() == QEvent.Type.Resize:
+            # Find the QScrollArea viewport in our tree and resize the
+            # grid when its size changes.  The QScrollArea itself is
+            # the parent of the viewport and the grid is the widget.
+            sc = obj.parent() if obj is not None else None
+            if sc is not None and hasattr(sc, "viewport") and obj is sc.viewport():
+                if hasattr(self, "_resize_grid_to_viewport"):
+                    self._resize_grid_to_viewport()
+        return super().eventFilter(obj, event)
+
+    def menu(self):
+        """Backward-compat: delegate to MainMenuBuilder (M-2 Schritt 13)."""
+        MainMenuBuilder(self).build()
 
     def add_to_grid(self, singer):
         if not self.grid.place_singer(singer):
@@ -223,7 +518,7 @@ class MainWindow(QMainWindow):
         self.pool.placed_singer_ids = self.grid.get_placed_singer_ids()
         self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
         self.update_grid_count()
-        self.is_modified = True
+        self._is_modified = True
 
     def upd_grid(self):
         r = int(self.rs.currentText())
@@ -250,14 +545,14 @@ class MainWindow(QMainWindow):
         self.grid.set_staggered(self.stag_radio.isChecked())
 
     def undo_last_action(self):
-        self.undo_stack.undo()
+        self.grid.undo_stack.undo()
 
     def redo_last_action(self):
-        self.undo_stack.redo()
+        self.grid.undo_stack.redo()
 
     def update_undo_redo(self):
-        self.undo_action.setEnabled(self.undo_stack.canUndo())
-        self.redo_action.setEnabled(self.undo_stack.canRedo())
+        self.undo_action.setEnabled(self.grid.undo_stack.canUndo())
+        self.redo_action.setEnabled(self.grid.undo_stack.canRedo())
 
     def swap_selected_singers(self):
         self.grid.swap_selected_singers()
@@ -276,7 +571,7 @@ class MainWindow(QMainWindow):
             s.row = -1
             s.col = -1
         self.grid.refresh_grid()
-        self.is_modified = True
+        self._is_modified = True
         self.update_grid_count()
 
     def apply_all_affinity_proximity(self):
@@ -302,20 +597,124 @@ class MainWindow(QMainWindow):
             processed.add(partner.singer_id)
         if moved > 0:
             self.statusBar().showMessage(f"{moved} Singpartner nebeneinander platziert", 3000)
-            self.is_modified = True
+            self._is_modified = True
         else:
             QMessageBox.information(self, "Nähe", "Alle Singpartner sind bereits nebeneinander oder nicht in der gleichen Reihe.")
+
+    # ------------------------------------------------------------------
+    # File-IO (M-2 Schritt 8) -- thin delegates around FormationFileIO
+    # ------------------------------------------------------------------
+    #
+    # The dialog-heavy paths (resize-warning when there are more placed
+    # singers than grid cells) stay on MainWindow; the storage round-trip
+    # and the auto-filename generator live in file_io.py.
+
+    def new_f(self):
+        # Backward-compat: menu wiring calls this method.
+        return self.file_io.new(parent=self, is_modified=self._is_modified)
+
+    def open_f(self):
+        # Backward-compat: menu wiring calls this method.
+        return self.file_io.open(parent=self)
+
+    def _open_file(self, fp):
+        """Backward-compat helper: load the formation at ``fp`` into self."""
+        data = self.storage.load_formation(fp)
+        if not data:
+            return
+        self.file_io.load_formation_data(self, data)
+        self.file = fp
+        self._loaded_metadata = data.get("metadata", {})
+
+    def _exceeds_grid_capacity(self):
+        """Return ``excess`` (>=1) when more singers are placed than the grid holds."""
+        grid_cells = self.grid.rows * self.grid.cols
+        placed = len(self.grid.singers)
+        if placed <= grid_cells:
+            return 0
+        return placed - grid_cells
+
+    def _ask_resize_or_reset(self, excess: int) -> bool:
+        """Show the resize/reset dialog. Returns True if the user picked
+        'In Pool zurücksetzen' (excess singers should be reset to the pool)."""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Zu viele Sänger")
+        msg_box.setText(
+            f"Die Aufstellung hat {len(self.grid.singers)} Sänger im Raster, "
+            f"aber nur {self.grid.rows * self.grid.cols} Plätze."
+        )
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+
+        btn_resize = QPushButton("Raster vergrößern")
+        btn_pool = QPushButton("In Pool zurücksetzen")
+        msg_box.addButton(btn_resize, QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton(btn_pool, QMessageBox.ButtonRole.ActionRole)
+        return msg_box.exec() == btn_pool
+
+    def save_f(self):
+        excess = self._exceeds_grid_capacity()
+        if excess:
+            if not self._ask_resize_or_reset(excess):
+                return False
+            self._reset_excess_to_pool(excess)
+        if not self.file:
+            return self.save_as_f()
+        return self._save_file(self.file, metadata=self._loaded_metadata)
+
+    def save_as_f(self):
+        excess = self._exceeds_grid_capacity()
+        if excess:
+            if not self._ask_resize_or_reset(excess):
+                return False
+            self._reset_excess_to_pool(excess)
+        return self.file_io.save_as(parent=self, grid=self.grid)
+
+    def _save_file(self, fp, metadata: dict = None):
+        if self.file_io.save_to_path(fp, self.grid, metadata=metadata):
+            self.file = fp
+            self._is_modified = False
+            import time
+            self.last_manual_save_mtime = time.time()
+            return True
+        return False
+
+    def generate_filename(self, event_date: str, event_name: str = None) -> str:
+        """Delegate to FormationFileIO for backward compatibility."""
+        return self.file_io.generate_filename(event_date, event_name)
+
+    def _check_recovery(self):
+        """Backward-compat: delegate to self.recovery (M-2 Schritt 11)."""
+        return self.recovery.check()
+
+    def export_pdf(self):
+        # Backward-compat: menu wiring calls this method.
+        # All work is delegated to self.pdf_bridge (M-2 Schritt 9).
+        return self.pdf_bridge.run()
+
+    def run_optimizer(self):
+        d = OptimizerDialog(self)
+        if d.exec() == QDialog.DialogCode.Accepted:
+            rules = d.get_selected_rules()
+            if rules:
+                primary = d.get_primary_rule()
+                refinement = d.get_refinement_rules()
+                self.grid.optimize(primary, refinement)
 
     def show_cfg(self):
         d = VoicingConfigDialog(self)
         if d.exec() == QDialog.DialogCode.Accepted:
             pass
 
+    def _apply_theme(self, theme):
+        """Backward-compat: delegate to self.theme_applier (M-2 Schritt 12)."""
+        self.theme_applier.apply(theme)
+        self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
+
     def add_singer_via_menu(self):
         s = self.pool.add_dialog()
         if s:
             self.singers.append(s)
-            self.is_modified = True
+            self._is_modified = True
 
     def edit_singer(self, singer):
         new_singer = self.pool.add_dialog(singer)
@@ -323,14 +722,14 @@ class MainWindow(QMainWindow):
             idx = next((i for i, s in enumerate(self.singers) if s.singer_id == singer.singer_id), -1)
             if idx >= 0:
                 self.singers[idx] = new_singer
-            self.is_modified = True
+            self._is_modified = True
 
     def set_singer_affinity(self, singer):
         self.pool.set_affinity(singer)
 
     def on_singer_removed_from_grid(self, singer):
         self.pool.update_singers(self.singers, self.grid.get_placed_singer_ids())
-        self.is_modified = True
+        self._is_modified = True
         self.update_grid_count()
 
     def do_quick_search(self):
@@ -343,14 +742,36 @@ class MainWindow(QMainWindow):
                 self.grid.highlight_singer(s, self)
                 return
 
+    def upd_leg(self):
+        while self.llay.count():
+            w = self.llay.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        for vg in self.cfg:
+            if isinstance(vg, dict):
+                vg_id = vg.get("id", "")
+                vg_color = vg.get("color", "#cccccc")
+            else:
+                vg_id = vg
+                vg_color = get_voice_group_color(vg)
+            l = QLabel(vg_id)
+            l.setStyleSheet(f"background: {vg_color}; padding: 4px; color: #000;")
+            self.llay.addWidget(l)
+        self.llay.addStretch()
+
     def show_about(self):
         QMessageBox.about(self, "Über Choraufstellung", "Choraufstellung 1.0\n\nVerwaltung von Choraufstellungen.")
 
     def closeEvent(self, e):
-        if self.is_modified:
+        # M-2 Schritt 7 changed ``is_modified`` from a plain attribute to
+        # the AutoSaveController protocol *method* ``is_modified()``.
+        # Evaluating the bound method itself would always be truthy and
+        # would show the save-dialog even for pristine windows (and
+        # block forever in offscreen/CI runs). Always call it here.
+        if self.is_modified():
             r = QMessageBox.question(self, "Ungespeichert", "Änderungen speichern?", QMessageBox.StandardButton.Save|QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
             if r == QMessageBox.StandardButton.Save:
-                self.file_service.save_file()
+                self.save_f()
                 e.accept()
             elif r == QMessageBox.StandardButton.Discard:
                 e.accept()
@@ -359,6 +780,38 @@ class MainWindow(QMainWindow):
         else:
             e.accept()
 
+    def _load_from_chormanager(self):
+        """Backward-compat: delegate to self.cm_bridge (M-2 Schritt 10)."""
+        return self.cm_bridge.load_from_env()
+    
+    def _load_formation_data(self, data: dict):
+        """Load formation data from dict (delegiert an ``self.file_io``).
+
+        A-5 Fix + M-5 Fix: Diese Methode war dupliziert zu
+        :meth:`file_io.FormationFileIO.load_formation_data`. Sie ist jetzt
+        ein duenner Wrapper, der die kanonische Implementierung aufruft.
+        Damit gibt es nur noch **einen** Code-Pfad fuer das Laden einer
+        Formation, was Recovery- und File-IO-Pfade konsistent haelt.
+        """
+        if hasattr(self, "file_io") and self.file_io is not None:
+            self.file_io.load_formation_data(self, data)
+        else:
+            # Defensive Fallback: sehr fruehe Initialisierung ohne file_io.
+            # Setze singer-Liste und Grid minimal.
+            self.singers = data.get("singers", [])
+            self.grid.rows = data.get("rows", 3)
+            self.grid.cols = data.get("cols", 4)
+            self.grid.staggered = data.get("staggered", False)
+            if hasattr(self.grid, "refresh_grid"):
+                self.grid.refresh_grid()
+            if hasattr(self, "pool"):
+                self.pool.singers = self.singers
+                if hasattr(self.grid, "get_placed_singer_ids"):
+                    self.pool.placed_singer_ids = self.grid.get_placed_singer_ids()
+                self.pool.update_singers(self.singers, self.pool.placed_singer_ids)
+            self._is_modified = False
+            if hasattr(self, "update_grid_count"):
+                self.update_grid_count()
 
 
 def main():
@@ -381,7 +834,7 @@ def main():
         w.storage.filepath = chor_file
         data = w.storage.load_formation(chor_file)
         if data:
-            w.formation_loader.load_formation_data(data)
+            w._load_formation_data(data)
     
     w.show()
     sys.exit(app.exec())

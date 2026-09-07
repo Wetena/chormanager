@@ -76,7 +76,7 @@ class TestRepertoireDialog:
         count_before = len(repo.get_all())
         # Mock QMessageBox to prevent blocking
         from unittest.mock import patch
-        with patch("chormanager.ui.dialogs.repertoire_dialog.QMessageBox"):
+        with patch("chormanager.ui.dialogs._repertoire.QMessageBox"):
             dialog._on_accept()
         count_after = len(repo.get_all())
         assert count_after == count_before

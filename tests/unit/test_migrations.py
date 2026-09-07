@@ -107,3 +107,47 @@ class TestDatabaseMigrations:
                 ("test-id", "nonexistent-singer", "nonexistent-event", "yes", "2026-01-01", "2026-01-01"),
             )
         db.close()
+
+    def test_spielzeit_column_migrated(self, tmp_path):
+        """A pre-spielzeit projects table gets the column added."""
+        db_path = str(tmp_path / "old.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                description TEXT,
+                is_active INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO projects (id, name, created_at, updated_at) "
+            "VALUES ('p1', 'Altes Projekt', '2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+        conn.close()
+
+        db = Database(db_path)
+        db.connect()
+        db.create_tables()
+
+        cols = {
+            row[1]
+            for row in db.get_connection().execute("PRAGMA table_info(projects)")
+        }
+        assert "spielzeit" in cols, (
+            "create_tables must migrate legacy projects tables by "
+            "adding the spielzeit column (added in the ChorManager "
+            "spielzeit feature)."
+        )
+
+        # The pre-existing row must still be readable and map onto the
+        # Project model (SELECT * must not crash with a missing column).
+        from chormanager.domain.repository import ProjectRepository
+        repo = ProjectRepository(db)
+        project = repo.get_by_id("p1")
+        assert project is not None
+        assert project.name == "Altes Projekt"
+        db.close()

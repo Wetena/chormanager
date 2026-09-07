@@ -1,38 +1,99 @@
 #!/bin/bash
-set -e
+# ----------------------------------------------------------------------------
+# ChorManager Launcher (cross-platform, robust)
+# ----------------------------------------------------------------------------
+# Erkennt automatisch eine geeignete Python-Version (>= 3.9), legt bei Bedarf
+# ein Virtual Environment an, installiert Dependencies und startet die App.
+# ----------------------------------------------------------------------------
+set -u
+# Wir nutzen KEIN "set -e", weil einzelne, optionale Schritte (z. B. pip
+# upgrade) nicht den gesamten Start abbrechen sollen.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-find_python() {
-    for cmd in python3.13 python3.12 python3.11 python3.10 python3.9 python3 python; do
-        if command -v "$cmd" &>/dev/null; then
-            echo "$cmd"
-            return 0
+# --- 1. Python-Detection ---------------------------------------------------
+# Reihenfolge der Kandidaten: bevorzugt neuere Versionen, dann 3.9 als Minimum.
+PYTHON_BIN=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        # Prüfe Mindestversion (3.9)
+        if "$candidate" -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>/dev/null; then
+            PYTHON_BIN="$candidate"
+            break
         fi
-    done
-    echo "ERROR: Kein Python3 interpreter gefunden." >&2
-    echo "Installiere Python3: sudo apt install python3 python3-venv" >&2
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "[FEHLER] Kein passender Python-Interpreter gefunden."
+    echo "         Benötigt wird Python >= 3.9."
+    echo "         Installiere z. B. mit:  sudo apt install python3 python3-venv"
     exit 1
-}
+fi
 
-PYTHON=$(find_python)
-echo "Verwende: $PYTHON ($($PYTHON --version 2>&1))"
+PY_VERSION="$("$PYTHON_BIN" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
+echo "Verwende Python $PY_VERSION ($PYTHON_BIN)"
 
+# --- 2. venv anlegen/prüfen ------------------------------------------------
 if [ ! -d ".venv" ]; then
-    echo "Erstelle Virtual Environment..."
-    "$PYTHON" -m venv .venv
+    echo "Erstelle Virtual Environment in .venv ..."
+    if ! "$PYTHON_BIN" -m venv .venv; then
+        echo "[FEHLER] Konnte venv nicht erstellen."
+        echo "         Unter Debian/Ubuntu:  sudo apt install python3-venv"
+        exit 1
+    fi
 fi
 
-if [ ! -f ".venv/bin/pip" ]; then
-    echo "Fehler: .venv/bin/pip nicht gefunden." >&2
-    exit 1
+# Pfade innerhalb des venv
+VENV_PY=".venv/bin/python"
+VENV_PIP=".venv/bin/pip"
+
+# Auf manchen Systemen heißen die Binaries leicht anders (FreeBSD, Alpine, ...).
+if [ ! -x "$VENV_PY" ]; then
+    VENV_PY="$(find .venv -maxdepth 2 -type f \( -name 'python3*' -o -name 'python' \) -executable 2>/dev/null | head -n 1)"
+    if [ -z "$VENV_PY" ]; then
+        echo "[FEHLER] Konnte Python-Binary im venv nicht finden."
+        ls -la .venv/bin/ 2>/dev/null || true
+        exit 1
+    fi
+fi
+if [ ! -x "$VENV_PIP" ]; then
+    VENV_PIP="$(find .venv -maxdepth 2 -type f -name 'pip*' -executable 2>/dev/null | head -n 1)"
 fi
 
-if ! "$PYTHON" -c "import PyQt6" 2>/dev/null; then
-    echo "Installiere Dependencies..."
-    .venv/bin/pip install -r requirements.txt
+# --- 3. Dependencies installieren -----------------------------------------
+# Wir prüfen, ob die wichtigsten Pakete bereits importierbar sind. Das ist
+# deutlich robuster als ein Pfad-Glob.
+NEED_INSTALL=0
+if [ ! -x "$VENV_PIP" ]; then
+    NEED_INSTALL=1
+else
+    if ! "$VENV_PY" -c "import PyQt6, yaml, reportlab" >/dev/null 2>&1; then
+        NEED_INSTALL=1
+    fi
 fi
 
-source .venv/bin/activate
-exec python -m chormanager "$@"
+if [ "$NEED_INSTALL" -eq 1 ]; then
+    echo "Installiere Dependencies ..."
+    if [ ! -x "$VENV_PIP" ]; then
+        echo "[FEHLER] pip im venv nicht gefunden. Versuche ensurepip ..."
+        "$VENV_PY" -m ensurepip --upgrade || {
+            echo "[FEHLER] ensurepip fehlgeschlagen."
+            exit 1
+        }
+        VENV_PIP=".venv/bin/pip"
+    fi
+
+    # pip selbst aktualisieren (ignoriere Fehler, falls offline)
+    "$VENV_PIP" install --upgrade pip >/dev/null 2>&1 || true
+
+    if ! "$VENV_PIP" install -r requirements.txt; then
+        echo "[FEHLER] Installation der Dependencies fehlgeschlagen."
+        exit 1
+    fi
+fi
+
+# --- 4. App starten --------------------------------------------------------
+echo "Starte ChorManager ..."
+exec "$VENV_PY" -m chormanager "$@"

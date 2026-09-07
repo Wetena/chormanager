@@ -81,3 +81,10 @@ class BesetzungRepository:
         result = self.db.execute("DELETE FROM besetzung WHERE id = ?", (besetzung_id,))
         self.db.commit()
         return result.rowcount > 0
+
+    def set_active(self, project_id: str) -> None:
+        """Set active besetzung for a project (most recent)."""
+        self.db.execute(
+            "UPDATE besetzung SET is_active = 1 WHERE project_id = ?", (project_id,)
+        )
+        self.db.commit()

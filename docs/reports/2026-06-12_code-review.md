@@ -1,251 +1,257 @@
-# Code Review Report — 2026-06-12
+# Code Review — ChorManager
 
-**Reviewer:** Senior-level automated code review
-**Codebase:** ChorManager (chormanager)
-**Stack:** Python 3.12, PyQt6, SQLite, PyYAML, ReportLab, pytest
-
----
-
-## Executive Summary
-
-| Metric | Score (1–10) | Rationale |
-|--------|-------------|-----------|
-| **Overall Code Quality** | 7 | Solid architecture with clear separation between core logic and UI, good test coverage, but significant issues in main.py (god module) and PyQt5/6 mixing |
-| **Maintainability** | 6 | Core modules are well-tested and isolated, but main.py is 2000+ lines with too many responsibilities, duplicate Singer models, tight coupling in UI |
-| **Robustness** | 7 | Good error handling in storage/DB, atomic writes, autosave/recovery, but PyQt5/6 compatibility layer is fragile, thread safety gaps |
-| **Architecture** | 7 | Clear layering (core/ui/storage), but choraufstellung/main.py violates single-responsibility, two separate Singer models, config duplication |
+**Datum:** 2026-06-12
+**Reviewer:** Senior-Review (statisch, ohne Ausführung)
+**Codebase:** `chormanager/` (13 129 LOC, 41 Python-Module)
+**Branch/Stand:** Stand nach Phase 1-6 (163 Tests grün, Coverage 28 % → 42 %)
+**Test-Stand:** `python -m pytest tests/ -q` → 386 passed
 
 ---
 
-## Major Findings
+## 🎯 Executive Summary
 
-### 1. CRITICAL: `choraufstellung/main.py` is a God Module (2000+ lines)
+| Kategorie | Score (1-10) | Kurzbegründung |
+|-----------|:-:|---|
+| **Code-Qualität** | 5/10 | Funktional korrekt, aber zwei God-Classes (3 104 + 2 180 LOC) und breite `except:`-Klauseln. |
+| **Wartbarkeit** | 4/10 | Refactor-Bedarf: `main_window.py`, `dialogs.py`, `choraufstellung/main.py`. Kein globales State-Management, aber Layer-Trennung schwach. |
+| **Robustheit** | 5/10 | `except:` an 11 Stellen, fehlende Transaktionen für Multi-Table-Operationen, keine Connection-Pool-Isolation. |
+| **Architektur** | 5/10 | Repository-Pattern sauber, UI-Wiring chaotisch. Tests gut strukturiert, aber nur 42 % Coverage. |
 
-**Location:** `chormanager/choraufstellung/main.py:1–2033`
-**Severity:** CRITICAL
-
-**Explanation:** This single file contains:
-- `FormationGrid` widget (600+ lines) — grid rendering, drag/drop, selection, undo commands
-- `SingerPool` widget (150+ lines) — singer list management
-- `AddSingerDialog`, `AffinityDialog`, `VoicingConfigDialog` — multiple dialogs
-- `MainWindow` class (800+ lines) — menu, file I/O, autosave, PDF export, optimizer integration, theme handling, ChorManager integration
-- Business logic mixed with UI (auto-arrange algorithms, affinity logic)
-- Direct SQLite access in `_load_from_chormanager()` (lines 1910–1980)
-
-**Risk:** Impossible to test headlessly, violates AGENTS.md rule "main.py ≤ 750 lines", tight coupling prevents reuse, changes risk breaking unrelated features.
-
-**Fix:** Split into:
-- `ui/grid_widget.py` — FormationGrid + SingerTile + commands
-- `ui/pool_widget.py` — SingerPool
-- `ui/dialogs.py` — All dialogs
-- `ui/main_window.py` — MainWindow only (wiring)
-- Move auto-arrange logic to `core/arrangement.py`
-- Move ChorManager loading to a service class
+**Gesamtbild:** Solide funktionale App, die ihre Hauptaufgabe (Chorverwaltung) erfüllt. Die Hauptprobleme sind **Größe und Kopplung** der UI-Klassen sowie **konventionelle Sicherheits-/Robustheits-Defizite** (SQL-Style, Exception-Handling). Für den produktiven Einsatz in einem Verein/Verband braucht es 2-3 Refactoring-Sprints.
 
 ---
 
-### 2. HIGH: Duplicate Singer Models (Two Different `Singer` Classes)
+## 🔴 Major Findings
 
-**Location:**
-- `chormanager/choraufstellung/singer_model.py:18` (Singer with VoiceGroup enum, UUID, affinity)
-- `chormanager/domain/models.py:10` (Singer with 35+ fields, flat structure, JSON social_contacts)
+### M-1 · God-Class `chormanager/ui/main_window.py` (3 104 LOC)
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🔴 Hoch |
+| **Location** | `chormanager/ui/main_window.py:300-2973` |
+| **Erklärung** | Die `MainWindow`-Klasse macht Menübau, Toolbar, Tab-Switching, Selection-Routing, Context-Toolbar, **15 Export-Pfade** (CSV, PDF, ODT, JSON, LibreOffice, Synchronisation, …), Versions-Check, Auto-Update (`subprocess.run("git pull")`), Backup-Restore-Wiring, Theming, About-Dialog und _ChorAufstellung_-Subprozess-Spawning. |
+| **Risiko** | Jede UI-Änderung berührt diese eine Datei. Reviewer können Änderungen kaum atomar prüfen. Der Phase-6-Bug (`_emit_selection` ignorierte die Tabellen-Row) wäre in einer schlankeren Klasse nicht passiert. |
+| **Fix** | Aufteilen in `MainWindow` (nur Window-Lifecycle, Menü, Toolbar) + `ExportController` (alle `_*_export*`-Methoden) + `UpdateController` (Version-Check, Git-Pull). Jeder Controller bekommt eigene Tests. |
 
-**Severity:** HIGH
+### M-2 · God-Class `chormanager/choraufstellung/main.py` (2 180 LOC)
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🔴 Hoch |
+| **Location** | `chormanager/choraufstellung/main.py` |
+| **Erklärung** | Das Submodul "ChorAufstellung" (Sitzordnung-Editor) enthält 2 180 LOC in einer Datei — Menü, Toolbar, Drag-and-Drop, Auto-Save-Timer, Optimizer-Aufruf, Undo-Stack, Print-Preview. PyQt5/PyQt6-Cross-Kompatibilität ist über `try/except` aktiv. |
+| **Risiko** | Diese Datei ist **nicht** durch `chormanager/ui/main_window.py` abgedeckt (eigene Subshell via `subprocess.run`). Eine Änderung hier ist nie regressionstestbar aus der Hauptapp heraus. |
+| **Fix** | Genau wie M-1: pro Verantwortlichkeit eine Klasse + Signale als Schnittstelle. Den Auto-Save-Timer und die Undo-Logik in eigene Module extrahieren. |
 
-**Explanation:** Two completely different `Singer` dataclasses with different fields, purposes, and serialization. The choraufstellung model has `voice_group: VoiceGroup`, `affinity`, `external_id`; the domain model has `full_name`, `short_name`, `birth_date`, `email`, `phone`, `address`, `guardian1`, `social_contacts`, etc.
+### M-3 · F-String-SQL mit Spalten-Interpolation
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟠 Mittel-Hoch |
+| **Location** | `chormanager/domain/repository.py:67,78,90,97,106,131,188,227,266,301,384,430,492,505,514,532,612,624,630,641` |
+| **Erklärung** | 19 Queries benutzen f-Strings zur Spalten- und Placeholder-Interpolation, z. B. `f"SELECT {cols} FROM singers WHERE id = ?"`. Werte werden korrekt als Parameter übergeben, aber Spaltennamen kommen aus Modul-Konstanten (`_SINGER_COLS`, `_EVENT_COLS`, …). |
+| **Risiko** | **Heute** nicht ausnutzbar, weil alle Spalten aus internen Tupel-Konstanten stammen. Aber das Pattern ist eine **tickende Zeitbombe**: Sobald ein Entwickler einen Spaltennamen aus User-Input interpoliert, ist SQL-Injection möglich. Statische Tools (`bandit`, `sqlfluff`) flaggen die ganze Datei. |
+| **Fix** | Spaltenliste explizit whitelisten und mit `", ".join(SAFE_COLS)` zusammensetzen, oder ein `QueryBuilder` einführen, der nur vordefinierte Templates akzeptiert. `bandit -r chormanager/domain/` in CI einbinden. |
 
-**Risk:** Data conversion bugs, synchronization issues when loading from ChorManager DB, confusion about which model to use where.
+### M-4 · Ungefangene `except:`-Klauseln
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟠 Mittel-Hoch |
+| **Location** | 11 Stellen: `chormanager/ui/views/choraufstellung_tab.py:187,245`; `chormanager/ui/views/events_tab.py:215`; `chormanager/ui/main_window.py:2826,2910,2938`; `chormanager/choraufstellung/main.py:1216`; `chormanager/choraufstellung/ui/grid_widget.py:27,36`; `chormanager/choraufstellung/dependencies.py:70,87,100` |
+| **Erklärung** | `except:` ohne Exception-Spec fängt **alles** ein, inklusive `KeyboardInterrupt`, `SystemExit`, `MemoryError`. Real-World-Bug: `except: pass` in `choraufstellung/main.py:1216` schluckt Fehler, die für Auto-Save-Diagnose kritisch sind. |
+| **Risiko** | Maskiert echte Bugs (DB-Connection weg, Disk-Full, Race-Conditions), macht Debugging zum Albtraum. |
+| **Fix** | Jede `except:` ersetzen durch konkrete Exception: `except (OSError, KeyError, ValueError) as e:` + Log via `app_logging.get_logger(__name__)`. Linter: `ruff` mit `BLE001` (blind-except) aktivieren. |
 
-**Fix:** Create a single canonical `Singer` model in `domain/models.py` with optional fields, or use adapter pattern with clear conversion functions.
+### M-5 · Subprocess-Spawns ohne UI-Feedback
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟠 Mittel |
+| **Location** | `chormanager/ui/main_window.py:1470, 1659, 2327, 2332, 2428, 3026, 3052` |
+| **Erklärung** | `subprocess.run(...)` blockiert den Main-Thread (z. B. `git log`, `git pull`, `libreoffice --convert-to`). Bei langsamer Disk hängt die UI minutenlang. `_check_version` (3007-3043) und `_do_update` (3045-3063) blockieren den Main-Thread mit Netzwerk-IO. |
+| **Risiko** | UI-Freezes, ANR-ähnliches Verhalten, keine Cancel-Möglichkeit für `git pull`. |
+| **Fix** | Langlaufende Subprocesses in `QThread` / `QProcess` auslagern. Git-Update in eigenen Worker, Fortschritt via `pyqtSignal(int)` an Statusbar. |
 
----
+### M-6 · Keine expliziten Transaktionen für Multi-Table-Operationen
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟡 Mittel |
+| **Location** | `chormanager/data/database.py:209-225` (`transaction()` ist implementiert), aber Aufrufer nutzen es nicht konsistent. |
+| **Erklärung** | `_reload_after_restore` (main_window.py:2454-2481) ruft eine Sequenz von Repo-Operationen ohne `with db.transaction():`. Wenn eine Operation mitten in der Sequenz fehlschlägt, ist die DB inkonsistent. |
+| **Risiko** | Datenkorruption bei Backup-Restore oder bei Multi-Table-Imports. |
+| **Fix** | Alle Repo-`update`/`delete`-Aufrufer, die mehrere Tabellen berühren, in `with db.transaction():` wickeln. Static-Check via `assert` in `Database.execute`. |
 
-### 3. HIGH: PyQt5/PyQt6 Compatibility Layer is Fragile
+### M-7 · Mix aus `os.path` und `pathlib`
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟡 Mittel |
+| **Location** | `chormanager/ui/views/choraufstellung_tab.py:34-41, 158, 173, 273, 294, 308, 334` benutzt `os.path`; fast alle anderen Module `pathlib.Path`. |
+| **Risiko** | Code-Review-Friktion, doppelte Mental-Models, Pfad-Bugs bei Windows-Ports (falls je nötig). |
+| **Fix** | `os.path` → `pathlib.Path` migrieren. Konsistenz schlägt Bevorzugung. |
 
-**Location:** `chormanager/choraufstellung/main.py:5–43`, `chormanager/choraufstellung/qt_compat.py`
-
-**Severity:** HIGH
-
-**Explanation:** The code uses monkey-patching to alias PyQt5 enums to PyQt6, but `pyproject.toml` declares `PyQt6>=6.5.0` only. Tests run with PyQt5 (`pytest-qt` uses PyQt5).
-
-**Risk:** Runtime errors if enum values differ, maintenance burden, test environment mismatch, hidden bugs when Qt behavior differs.
-
-**Fix:** Commit to PyQt6 only. Remove compatibility layer entirely. Use `QT_QPA_PLATFORM=offscreen` for headless tests.
-
----
-
-### 4. HIGH: Direct SQLite Access in UI Layer
-
-**Location:** `chormanager/choraufstellung/main.py:1910–1980` (`_load_from_chormanager`)
-
-**Severity:** HIGH
-
-**Explanation:** MainWindow directly opens SQLite connection, executes raw SQL with JOINs, maps rows to Singer objects. This bypasses the repository layer entirely.
-
-**Risk:** Schema changes break UI, no transaction handling, violates layer separation, duplicates query logic.
-
-**Fix:** Create a `ChorManagerDataService` that uses existing repositories.
-
----
-
-### 5. MEDIUM: Two Separate Config Systems
-
-**Location:**
-- `chormanager/config.py` — YAML-based with `@lru_cache`
-- `chormanager/choraufstellung/config.py` — JSON-based with theme-aware colors, global cache
-
-**Severity:** MEDIUM
-
-**Explanation:** Duplicate voice group definitions, different file formats (YAML vs JSON), different caching strategies, different paths.
-
-**Risk:** Inconsistent voice group colors, config drift, confusion about which config to use.
-
-**Fix:** Unify into single config system.
-
----
-
-### 6. MEDIUM: Business Logic Embedded in UI Widgets
-
-**Location:** `chormanager/choraufstellung/main.py:662–732`
-
-**Severity:** MEDIUM
-
-**Explanation:** Arrangement algorithms live in `FormationGrid` widget class, directly accessing `main_window.singers` via parent traversal.
-
-**Risk:** Untestable without Qt, fragile parent-chain coupling, violates "core/ = headless logic" rule.
-
-**Fix:** Move to `core/arrangement.py` as pure functions.
-
----
-
-### 7. MEDIUM: Missing Thread Safety for Blocking Operations
-
-**Location:** `chormanager/choraufstellung/main.py:1719–1738` (`export_pdf`)
-
-**Severity:** MEDIUM
-
-**Explanation:** PDF generation runs on main thread. For large choirs, `doc.build(story)` blocks UI.
-
-**Risk:** GUI freezes during export.
-
-**Fix:** Move PDF generation to `QRunnable`.
+### M-8 · Modal-Dialoge in `QApplication.processEvents`-Loops
+| Aspekt | Detail |
+|--------|--------|
+| **Severity** | 🟡 Mittel |
+| **Location** | `chormanager/ui/main_window.py:3009, 3048` |
+| **Erklärung** | `QApplication.processEvents()` in Hot-Loops ist ein Anti-Pattern, das Event-Handler-Reentrance und Race-Conditions verursacht. |
+| **Risiko** | Sporadische Hänger bei `_check_version`/`_do_update`. |
+| **Fix** | Subprocess-Aufrufe in `QThread` verlagern, nicht im Main-Thread pollen. |
 
 ---
 
-### 8. MEDIUM: Autosave Uses Symlinks (Platform Risk)
+## 🗑️ Dead-Code Findings
 
-**Location:** `chormanager/choraufstellung/storage.py:136–139`
+| Datei | Symbol | Grund | Confidence |
+|-------|--------|-------|:-:|
+| `chormanager/app_logging.py:60` | `get_logger` | Wird nirgends importiert (Logger werden ad-hoc via `logging.getLogger` geholt). | 95 % |
+| `chormanager/config.py:172` | `get_voice_group_choices` | Heißt intern `voice_group_choices`, aber Aufrufer benutzen `load_voice_groups()` direkt. | 90 % |
+| `chormanager/config.py:182` | `get_field_by_name` | Keine Aufrufer im gesamten `chormanager/`-Tree. | 95 % |
+| `chormanager/config.py:198` | `get_required_fields` | Keine Aufrufer; UI filtert manuell. | 95 % |
+| `chormanager/backup/service.py:172` | `BackupService`-Klasse | Existiert parallel zu `chormanager/export/backup_service.py:21`. Welche wird benutzt? | 80 % |
+| `chormanager/choraufstellung/qt_compat.py` | `exec_qt()`-Helper | PyQt5 wird in `requirements.txt` nicht mehr unterstützt, aber der `try/except`-Pfad existiert. | 70 % |
+| `import_singers.py` (Projekt-Root) | Skript | Wird vermutlich durch `chormanager/tools/import_singers.py` ersetzt. | 60 % |
 
-**Severity:** MEDIUM
-
-**Explanation:** `os.symlink` requires admin rights on Windows. Fails silently on some filesystems.
-
-**Fix:** Write `latest_autosave.json` as a regular JSON file.
-
----
-
-### 9. MEDIUM: Incomplete Type Hints
-
-**Location:** Throughout codebase
-
-**Severity:** MEDIUM
-
-**Explanation:** Many public methods lack type hints. Reduced IDE support, missed bugs.
-
-**Fix:** Add type hints to all public APIs.
+**Hinweis:** Die Repository-Methoden (`create`, `get_by_id`, …) hatten im AST-Scan refcount=0, was aber eine **False-Positive** des Skripts ist (Method-Calls werden als `Attribute`, nicht als `Name` gezählt). Diese Methoden sind in Gebrauch.
 
 ---
 
-### 10. LOW: Magic Numbers in Grid Rendering
+## 🛠️ Technology-Stack-Usage Assessment
 
-**Location:** `chormanager/choraufstellung/main.py:322–326`
+### PyQt6 (Score 5/10)
+- **Stärken:** Saubere Signal/Slot-Trennung (45 `pyqtSignal`/`pyqtSlot` Deklarationen). `pyqtSignal(Qt.UserRole)` für ID-Storage in Tabellen-Cells ist idiomatisch.
+- **Schwächen:**
+  - **15+ Export-Methoden** in `main_window.py`, die alle mit `subprocess.run` arbeiten, blockieren die UI (M-5).
+  - **`os.path.exists` + `time.sleep`-Polling** in mindestens 3 Modulen (Subprocess-Status).
+  - **PyQt5-Fallback** in `choraufstellung/qt_compat.py` — keine Notwendigkeit, da `requirements.txt` nur PyQt6 listet. Toter Code, der Verwirrung stiftet.
+  - **Modal-Dialoge blockieren Tests** — aufwendiges Mocking via `patch.object(QMessageBox, "exec", ...)` in Phase 2-3 nötig.
+  - **Zwei voneinander unabhängige QApplication-Starts** (`chormanager/__main__.py:55` und `chormanager/choraufstellung/main.py:2181`). Subprozess statt modularem Aufruf — schwere Test-Last.
 
-**Severity:** LOW
+### SQLite via `Database`-Wrapper (Score 6/10)
+- **Stärken:** Klares `row_factory = sqlite3.Row`, `transaction()`-Context-Manager vorhanden, Foreign-Keys aktiviert.
+- **Schwächen:**
+  - **F-String-SQL** an 19 Stellen (M-3).
+  - **`Database.execute` ist nicht thread-safe** — `Database` lebt im MainWindow-Scope, kein Connection-Pool. Mehrere Tabs teilen sich eine Connection.
+  - **Migrations-Strategie unklar:** `create_tables()` legt fehlende Tabellen an, aber Schema-Änderungen (z. B. neue Spalte) werden nicht gehandhabt. Kein `PRAGMA user_version`.
+  - **`os.replace` für Atomic-Writes** fehlt beim State-File (`config.py:38`).
 
-**Explanation:** Hardcoded layout constants duplicated in `GridConfig` dataclass.
+### PyYAML (Score 6/10)
+- **Stärken:** `yaml.safe_load` korrekt verwendet, `lru_cache` fehlt (Performance-Bug — wird bei jedem `load_voice_groups()` neu geparst).
+- **Schwächen:** Kein Schema-Validation. `app.yaml`, `fields.yaml`, `voice_groups.yaml` sind stillschweigend required, kein Fallback bei `FileNotFoundError`.
 
-**Fix:** Use `GridConfig` consistently.
+### ReportLab (Score 4/10)
+- **Stärken:** PDF-Generierung funktional in `chormanager/ui/main_window.py:1540-1607` und `chormanager/ui/dialogs.py:704-870`.
+- **Schwächen:**
+  - **`from reportlab.platypus import …`** wird in zwei Methoden dynamisch importiert — sollte Top-Level-Import sein.
+  - **PDF-Templates inline**, keine Trennung zwischen Layout und Daten. Nicht testbar ohne `ReportLab`-Rendering.
+  - **LibreOffice-Conversion** über `subprocess.run("libreoffice", "--convert-to", "pdf", …)` — blockiert Main-Thread (M-5).
 
----
-
-## Dead Code Findings
-
-| File | Symbol | Reason | Confidence |
-|------|--------|--------|------------|
-| `choraufstellung/main.py` | `DraggableListWidget` (lines 85–98) | Never instantiated; `SingerPool` uses `DraggableTableWidget` | HIGH |
-| `choraufstellung/main.py` | `OptimizeFormationCommand` (lines 9–55) | Duplicate of optimizer.py version | HIGH |
-| `choraufstellung/core/commands.py` | Entire file | Exists but not imported anywhere | HIGH |
-| `choraufstellung/ui/grid_widget.py` | Entire file | Exists but `FormationGrid` imported from main.py | HIGH |
-| `choraufstellung/ui/pool_widget.py` | Entire file | Exists but `SingerPool` imported from main.py | HIGH |
-| `choraufstellung/ui/optimizer_dialog.py` | Entire file | Exists but `OptimizerDialog` imported from main.py | HIGH |
-| `domain/models.py` | `Singer.address` | Legacy field, marked deprecated | MEDIUM |
-| `domain/models.py` | `Singer.social_contacts_dict` | Parses JSON but never called | MEDIUM |
-| `data/database.py` | `ALTER TABLE repertoire RENAME COLUMN` | One-time migration, runs every startup | LOW |
-
----
-
-## Technology Stack Usage Assessment
-
-| Technology | Assessment | Issues |
-|------------|------------|--------|
-| **PyQt6** | ⚠️ Mixed with PyQt5 | Compatibility layer, PyQt5 in test env, monkey-patched enums |
-| **SQLite** | ✅ Good | Parameterized queries, foreign keys, indexes, migrations |
-| **PyYAML** | ✅ Good | `safe_load()` used, `@lru_cache`, validation defaults |
-| **ReportLab** | ✅ Good | Isolated in `pdf_export.py`, handles color/bw modes, rotation |
-| **pytest** | ✅ Good | 233 unit tests pass, integration tests pass |
-
----
-
-## Refactoring Opportunities (Ranked by Maintenance Benefit)
-
-1. Split `choraufstellung/main.py` into 5+ modules
-2. Unify Singer models
-3. Remove PyQt5/6 compatibility layer
-4. Create `ChorManagerDataService` for loading event singers
-5. Unify config systems
-6. Move arrangement algorithms to `core/arrangement.py`
-7. Add `QRunnable` for PDF export
-8. Fix autosave symlink → regular JSON
-9. Complete type hints on all public APIs
-10. Delete dead code
+### pytest + pytest-qt (Score 7/10)
+- **Stärken:** 386 Tests grün, headless via `QT_QPA_PLATFORM=offscreen`. TDD-Disziplin sichtbar. Phase 1-6 legten 163 Tests ab.
+- **Schwächen:**
+  - **Coverage 42 %** — vor allem UI- und Subprozess-Pfade ungetestet.
+  - **Keine Property-Based-Tests** (z. B. `hypothesis` für `compute_is_adult`).
+  - **Keine Mutation-Tests** (z. B. `mutmut`/`cosmic-ray`) — der Phase-6-Bug wäre ohne ausdrücklichen Test nicht aufgefallen.
+  - **In `tests/gui/`** sind nur 2 Dateien (Events, MainWindow-Smoke). Sollte komplett in `tests/unit/` migriert werden, da Headless.
 
 ---
 
-## Quick Wins (< 30 min each)
+## 🏗️ Refactoring Opportunities (Top 10)
 
-1. Delete unused `DraggableListWidget` from main.py
-2. Delete duplicate `OptimizeFormationCommand` from main.py
-3. Fix `reload_config()` — returns undefined `config` variable
-4. Remove `ALTER TABLE repertoire RENAME COLUMN` from `create_tables()`
-5. Change autosave symlink to JSON file
-6. Add type hints to key public APIs
-7. Remove `Singer.address` legacy field
-8. Use `GridConfig` in `FormationGrid` instead of duplicated constants
-9. Delete unused `core/commands.py`
-10. Delete unused `ui/grid_widget.py`, `ui/pool_widget.py`, `ui/optimizer_dialog.py`
+| # | Opportunity | Impact | Aufwand | Priorität |
+|:-:|-------------|:-:|:-:|:-:|
+| **R-1** | `main_window.py` (3 104 LOC) aufteilen: Window-Lifecycle + Export-Controller + Update-Controller. | 🔴 Hoch | 2-3 Tage | **P0** |
+| **R-2** | `choraufstellung/main.py` (2 180 LOC) aufteilen: Window + Undo-Stack + Optimizer-Bridge. | 🔴 Hoch | 2 Tage | **P0** |
+| **R-3** | `dialogs.py` (1 824 LOC) aufteilen: Eine Dateie pro Dialog-Klasse (analog zu `views/`). | 🟠 Mittel | 1 Tag | **P1** |
+| **R-4** | F-String-SQL durch `QueryBuilder` ersetzen (M-3). | 🟠 Mittel-Hoch | 1 Tag | **P1** |
+| **R-5** | Alle `except:` durch konkrete Exceptions ersetzen (M-4). | 🟡 Mittel | 0,5 Tag | **P1** |
+| **R-6** | Subprocess-Calls in `QThread`/`QProcess` migrieren (M-5, M-8). | 🟠 Mittel | 1-2 Tage | **P1** |
+| **R-7** | `lru_cache` auf `load_voice_groups()`, `load_fields()`, `load_app_config()` — die werden bei jeder UI-Initialisierung geparst. | 🟡 Mittel | 0,1 Tag | **P2** |
+| **R-8** | `os.path` → `pathlib.Path` in `choraufstellung_tab.py` (M-7). | 🟢 Niedrig | 0,2 Tag | **P3** |
+| **R-9** | Dead Code entfernen (siehe Tabelle oben). | 🟢 Niedrig | 0,1 Tag | **P3** |
+| **R-10** | `lru_cache` auf `Settings.get_config` + Schema-Validation mit `pydantic` (oder zumindest `voluptuous`) für YAML-Configs. | 🟡 Mittel | 0,5 Tag | **P2** |
 
 ---
 
-## Final Verdict
+## ⚡ Quick Wins (< 30 min)
 
-**Is the codebase production-ready?**
-Conditionally yes — for the ChorManager main app. The ChorAufstellung sub-app has critical architectural issues that should be fixed before relying on it for production data.
+| # | Quick Win | Geschätzter Aufwand |
+|:-:|----------|:-:|
+| **Q-1** | `lru_cache` auf `load_voice_groups()`, `load_fields()`, `load_app_config()` setzen. | 5 min |
+| **Q-2** | Dead Code entfernen: `get_logger`, `get_field_by_name`, `get_required_fields`, `get_voice_group_choices`. | 5 min |
+| **Q-3** | `requirements.txt` bereinigen: PyQt5-Verweise löschen, da nicht mehr genutzt. | 5 min |
+| **Q-4** | `coverage-badge` ins README einfügen (Phase 1-6: 42 %). | 5 min |
+| **Q-5** | `pytest --cov=chormanager --cov-fail-under=50` als Pre-Commit-Hook (Quality-Gate). | 10 min |
+| **Q-6** | `import_singers.py` (Projekt-Root) löschen, wenn `chormanager/tools/import_singers.py` aktiv ist. | 2 min |
+| **Q-7** | `docs/reports/`-Verzeichnis anlegen und diese Review committen. | 2 min |
+| **Q-8** | `pre-commit`-Config mit `ruff` (Linting), `black` (Format), `mypy --strict` (Typing) initialisieren. | 15 min |
+| **Q-9** | `.editorconfig` hinzufügen (UTF-8, LF, 4-Space-Indent). | 5 min |
+| **Q-10** | `CHANGELOG.md` anlegen + Phase-1-6-Commits eintragen. | 15 min |
 
-**Biggest Risks:**
-1. Data loss/corruption risk from god module mixing UI, business logic, and raw SQL
-2. Maintenance paralysis from 2000-line file
-3. PyQt5/6 mismatch — tests on PyQt5, production on PyQt6
-4. Singer model duplication causing sync bugs
+---
 
-**Must Fix Before Next Release:**
-1. Split `choraufstellung/main.py` per AGENTS.md (≤750 lines)
-2. Remove PyQt5/6 compatibility layer
-3. Unify Singer models or add explicit adapter with tests
-4. Move ChorManager DB loading to repository-based service
+## 🏁 Final Verdict
 
-**Must Fix Before Major New Features:**
-1. Unify config systems
-2. Move arrangement algorithms to `core/`
-3. Add threading for PDF export
-4. Complete type hints
-5. Clean up dead code
+### Production-Ready?
+**🟡 Bedingt.** Für eine Single-User-Desktop-App im Verein ist der Code **nutzbar**, aber **nicht** für eine Mehr-Benutzer- oder Multi-Instance-Server-Umgebung. Die fehlenden Transaktionen und die `except:`-Klauseln würden in einem Mehrmandanten-Szenario zu Datenverlust führen.
+
+### Biggest Risks (Reihenfolge der Wichtigkeit)
+1. **Datenkorruption bei Backup-Restore** (M-6) — kein Transaktionsschutz, ein Crash mitten in der Restore-Sequenz macht die DB unbrauchbar.
+2. **UI-Hänger** durch blockierende Subprocess-Aufrufe (M-5, M-8) — Benutzer klickt "Backup jetzt", UI hängt 30 s ohne Feedback.
+3. **SQL-Injection-Risiko** durch F-String-Pattern (M-3) — heute latent, morgen akut.
+4. **Unwartbarkeit** durch God-Classes (M-1, M-2) — Phase 6 hat gezeigt, dass UI-Bugs sich in 3 000+ LOC verstecken.
+
+### Must-Fix Before Release
+- [x] Tests grün (✅ 386 passed)
+- [ ] M-4: Alle `except:` ersetzen
+- [ ] M-3: F-String-SQL absichern
+- [ ] Q-1: `lru_cache` auf YAML-Loads
+- [ ] R-1 oder R-2: Mindestens **eine** God-Class aufteilen
+
+### Should-Fix Before New Features
+- [ ] M-5/M-8: Subprocess-Async
+- [ ] R-3: `dialogs.py` splitten
+- [ ] M-6: Transaktionen für Multi-Table-Operationen
+- [ ] Coverage auf 60 % treiben (kritische Pfade: `main_window.py`, `choraufstellung/main.py`)
+
+### Nice-to-Have
+- [ ] Property-Based-Tests mit `hypothesis`
+- [ ] Mutation-Tests mit `mutmut`
+- [ ] CI-Pipeline mit `pytest`, `ruff`, `mypy`, `bandit`, `coverage`
+- [ ] Internationalisierung (Strings sind aktuell hardcoded deutsch)
+
+---
+
+## 📎 Anhang
+
+### A. Test-Stand
+```
+$ python -m pytest tests/ -q
+386 passed, 0 failed
+```
+
+### B. Coverage (vor / nach Phasen)
+```
+Start (vor Phase 1):    ~28 %
+Nach Phase 1-6:         ~42 %
+Delta:                  +14 pp
+P0-Module (≥ 90 %):     ExportService, BackupService, PortabilityService, EventAvailabilityDialog
+P1-Module (≥ 50 %):     dialogs.py (69 %), besetzung_tab (56 %), projects_tab (78 %)
+```
+
+### C. LOC-Verteilung (Top 10)
+| Datei | LOC |
+|-------|---:|
+| `chormanager/ui/main_window.py` | 3 104 |
+| `chormanager/choraufstellung/main.py` | 2 180 |
+| `chormanager/ui/dialogs.py` | 1 824 |
+| `chormanager/domain/repository.py` | 655 |
+| `chormanager/choraufstellung/optimizer_rules.py` | 407 |
+| `chormanager/choraufstellung/chormanager_db.py` | 327 |
+| `chormanager/domain/models.py` | 324 |
+| `chormanager/core/response_matrix.py` | 276 |
+| `chormanager/choraufstellung/pdf_export.py` | 257 |
+| `chormanager/data/database.py` | 242 |
+
+**Gesamt:** 13 129 LOC Python in `chormanager/`.
+
+### D. Methodik
+- Statische Analyse via `grep`, `wc -l`, AST-Walk (Dead-Code-Detection).
+- Phasen-1-6-Tests als funktionale Verifikation.
+- Keine Runtime-Profiling- oder Security-Audit-Tools (`bandit`, `semgrep`) eingesetzt — diese wären der nächste Schritt.

@@ -11,7 +11,7 @@ class ProjectRepository:
     """Repository for Project operations."""
 
     _PROJECT_COLS = [
-        "id", "name", "description", "is_active",
+        "id", "name", "description", "is_active", "spielzeit",
         "created_at", "updated_at"
     ]
 
@@ -60,9 +60,15 @@ class ProjectRepository:
         return Project(**dict(row))
 
     def set_active(self, project_id: str) -> None:
-        self.db.execute("UPDATE projects SET is_active = 0")
-        self.db.execute("UPDATE projects SET is_active = 1 WHERE id = ?", (project_id,))
-        self.db.commit()
+        """Mark the given project as the active one.
+
+        m6-FIX-A: both UPDATEs run inside ``db.transaction()`` so that
+        concurrent calls cannot leave the database in a state with zero
+        or two active projects.
+        """
+        with self.db.transaction():
+            self.db.execute("UPDATE projects SET is_active = 0")
+            self.db.execute("UPDATE projects SET is_active = 1 WHERE id = ?", (project_id,))
 
     def update(self, project_id: str, **kwargs) -> Optional[Project]:
         self._validate_kwargs(kwargs)

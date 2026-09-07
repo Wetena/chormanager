@@ -64,12 +64,29 @@ class AvailabilityRepository:
         return [Availability(**dict(row)) for row in result.fetchall()]
 
     def update(self, singer_id: str, event_id: str, status: str) -> Optional[Availability]:
+        """Update availability status.
+
+        m7-FIX-A: avoid ``ON CONFLICT ... DO UPDATE`` which would create
+        a new row (with a freshly generated ``id``) on conflict. Instead
+        run ``INSERT OR IGNORE`` first and then a separate ``UPDATE``
+        that targets the existing row by the (singer_id, event_id) key.
+        This keeps ``id`` stable across repeated calls.
+        """
         now = datetime.now().isoformat()
+
+        # Step 1: try to insert a fresh row (idempotent via OR IGNORE).
         self.db.execute(
-            """INSERT INTO availability (id, singer_id, event_id, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(singer_id, event_id) DO UPDATE SET status = ?, updated_at = ?""",
-            (self.db.generate_id(), singer_id, event_id, status, now, now, status, now),
+            """INSERT OR IGNORE INTO availability
+                 (id, singer_id, event_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (self.db.generate_id(), singer_id, event_id, status, now, now),
+        )
+        # Step 2: update the existing row by key. The id stays untouched.
+        self.db.execute(
+            """UPDATE availability
+                  SET status = ?, updated_at = ?
+                WHERE singer_id = ? AND event_id = ?""",
+            (status, now, singer_id, event_id),
         )
         self.db.commit()
         return self.get_by_ids(singer_id, event_id)

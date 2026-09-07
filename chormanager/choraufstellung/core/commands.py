@@ -139,12 +139,61 @@ class MoveGroupCommand(UndoCommand):
 
 
 class UndoStack:
+    """Pure-Python undo/redo stack used by ChorAufstellung.
+
+    The implementation is intentionally Qt-agnostic so it can be unit
+    tested headless (see ``tests/unit/test_undo_commands.py``).  Qt
+    signal emission is layered on top by
+    ``choraufstellung.undo_bridge.QtUndoStack``.
+
+    Two optional callbacks can be registered:
+
+    - ``on_can_undo_changed(callable)`` — invoked with the new boolean
+      value whenever ``can_undo()`` may have changed.
+    - ``on_can_redo_changed(callable)`` — invoked with the new boolean
+      value whenever ``can_redo()`` may have changed.
+
+    Callbacks are fired AFTER the state mutation so observers can
+    safely query the new state.
+    """
+
     def __init__(self):
         self._stack: List[UndoCommand] = []
         self._index: int = 0
         self._clean_state: int = 0
-        self._can_undo_changed: bool = False
-        self._can_redo_changed: bool = False
+        # Use object() sentinels (not bool False) so callers can also
+        # register ``None`` as a no-op callback if they really want to.
+        self._can_undo_callback = None
+        self._can_redo_callback = None
+
+    # -- callbacks --------------------------------------------------------
+
+    def on_can_undo_changed(self, callback) -> None:
+        """Register a callback fired with the new boolean whenever
+        ``can_undo()`` may have changed.  Pass ``None`` to unregister."""
+        self._can_undo_callback = callback
+
+    def on_can_redo_changed(self, callback) -> None:
+        """Register a callback fired with the new boolean whenever
+        ``can_redo()`` may have changed.  Pass ``None`` to unregister."""
+        self._can_redo_callback = callback
+
+    def _notify_can_undo(self) -> None:
+        if self._can_undo_callback is not None:
+            try:
+                self._can_undo_callback(self.can_undo())
+            except Exception:
+                # Callbacks must never break the undo stack.
+                pass
+
+    def _notify_can_redo(self) -> None:
+        if self._can_redo_callback is not None:
+            try:
+                self._can_redo_callback(self.can_redo())
+            except Exception:
+                pass
+
+    # -- mutation ---------------------------------------------------------
 
     def push(self, command: UndoCommand) -> None:
         while len(self._stack) > self._index:
@@ -152,35 +201,54 @@ class UndoStack:
 
         self._stack.append(command)
         self._index += 1
-
-        if self._can_undo_changed:
-            self._can_undo_changed = len(self._stack) > 0 and self._index > 0
-        if self._can_redo_changed:
-            self._can_redo_changed = self._index < len(self._stack)
+        # Push clears redo history and may enable undo.
+        self._notify_can_undo()
+        self._notify_can_redo()
 
     def undo(self) -> bool:
         if not self.can_undo():
             return False
+        prev_undo = self.can_undo()
+        prev_redo = self.can_redo()
         self._index -= 1
         self._stack[self._index].undo()
+        # State may have flipped on either axis; fire both.
+        if prev_undo != self.can_undo():
+            self._notify_can_undo()
+        if prev_redo != self.can_redo():
+            self._notify_can_redo()
         return True
 
     def redo(self) -> bool:
         if not self.can_redo():
             return False
+        prev_undo = self.can_undo()
+        prev_redo = self.can_redo()
         self._stack[self._index].redo()
         self._index += 1
+        if prev_undo != self.can_undo():
+            self._notify_can_undo()
+        if prev_redo != self.can_redo():
+            self._notify_can_redo()
         return True
+
+    def clear(self) -> None:
+        was_undoable = self.can_undo()
+        was_redoable = self.can_redo()
+        self._stack.clear()
+        self._index = 0
+        if was_undoable:
+            self._notify_can_undo()
+        if was_redoable:
+            self._notify_can_redo()
+
+    # -- queries ----------------------------------------------------------
 
     def can_undo(self) -> bool:
         return self._index > 0
 
     def can_redo(self) -> bool:
         return self._index < len(self._stack)
-
-    def clear(self) -> None:
-        self._stack.clear()
-        self._index = 0
 
     def set_clean_state(self) -> None:
         self._clean_state = self._index
@@ -198,90 +266,3 @@ class UndoStack:
         if 0 <= idx < len(self._stack):
             return self._stack[idx]
         return None
-
-    def on_can_undo_changed(self, callback) -> None:
-        self._can_undo_changed = callback
-
-    def on_can_redo_changed(self, callback) -> None:
-        self._can_redo_changed = callback
-
-
-# Qt-compatible wrappers (QUndoCommand subclasses) for use in FormationGrid
-# These accept direct singer/grid references like the original main.py versions.
-
-try:
-    from PyQt6.QtGui import QUndoCommand
-
-    class QtMoveSingerCommand(QUndoCommand):
-        """QUndoCommand wrapper for MoveSingerCommand."""
-        def __init__(self, singer, old_row, old_col, new_row, new_col, grid):
-            super().__init__()
-            self.singer = singer
-            self.old_row = old_row
-            self.old_col = old_col
-            self.new_row = new_row
-            self.new_col = new_col
-            self.grid = grid
-            self.setText("Sänger verschoben")
-
-        def redo(self):
-            self.singer.row = self.new_row
-            self.singer.col = self.new_col
-            self.grid.refresh_grid()
-
-        def undo(self):
-            self.singer.row = self.old_row
-            self.singer.col = self.old_col
-            self.grid.refresh_grid()
-
-    class QtSwapSingersCommand(QUndoCommand):
-        """QUndoCommand wrapper for SwapSingersCommand."""
-        def __init__(self, singer1, singer2, grid):
-            super().__init__("Positionen getauscht")
-            self.singer1 = singer1
-            self.singer2 = singer2
-            self.grid = grid
-            self.old_row1, self.old_col1 = singer1.row, singer1.col
-            self.old_row2, self.old_col2 = singer2.row, singer2.col
-
-        def redo(self):
-            self.singer1.row, self.singer2.row = self.old_row2, self.old_row1
-            self.singer1.col, self.singer2.col = self.old_col2, self.old_col1
-            self.grid.refresh_grid()
-
-        def undo(self):
-            self.singer1.row, self.singer2.row = self.old_row1, self.old_row2
-            self.singer1.col, self.singer2.col = self.old_col1, self.old_col2
-            self.grid.refresh_grid()
-
-    class QtMoveGroupCommand(QUndoCommand):
-        """QUndoCommand wrapper for MoveGroupCommand."""
-        def __init__(self, selected_ids, dx, dy, grid):
-            super().__init__("Gruppe verschoben")
-            self.selected_ids = selected_ids
-            self.dx = dx
-            self.dy = dy
-            self.grid = grid
-            self.old_positions = {}
-            for sid in selected_ids:
-                singer = next((s for s in grid.singers if s.singer_id == sid), None)
-                if singer:
-                    self.old_positions[sid] = (singer.row, singer.col)
-
-        def redo(self):
-            for sid in self.selected_ids:
-                singer = next((s for s in self.grid.singers if s.singer_id == sid), None)
-                if singer:
-                    singer.row += self.dy
-                    singer.col += self.dx
-            self.grid.refresh_grid()
-
-        def undo(self):
-            for sid in self.selected_ids:
-                singer = next((s for s in self.grid.singers if s.singer_id == sid), None)
-                if singer and sid in self.old_positions:
-                    singer.row, singer.col = self.old_positions[sid]
-            self.grid.refresh_grid()
-
-except ImportError:
-    pass

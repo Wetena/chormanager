@@ -44,6 +44,9 @@ htmlcov/
 
 # Data directories - IMPORTANT: exclude all data
 data/
+# But allow the chormanager.data Python package (sub-package of source)
+!chormanager/data/
+!chormanager/data/*.py
 workdir/
 .backup/
 *.db
@@ -63,3 +66,6 @@ workdir/
 
 # GitNexus index
 .gitnexus/
+
+# Hypothesis (property-based tests)
+.hypothesis/
