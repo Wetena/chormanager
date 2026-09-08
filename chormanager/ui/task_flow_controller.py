@@ -72,9 +72,17 @@ class TaskFlowController(QObject):
         wizard.raise_()
 
     def _on_task_completed(self, task_id: str, context) -> None:
-        """Handle a successfully finished wizard run."""
+        """Handle a successfully finished wizard run.
+
+        2026-09 audit: the wizard context may carry entities the run
+        pinned or created (project/event/besetzung). Propagate them to
+        the UI so info bar, tabs and the persisted active ids all
+        reflect what the wizard did — for EVERY task, not just the
+        editor launch.
+        """
         window = self._window
         try:
+            self._sync_context_to_ui(context)
             if task_id == "aufstellung_planen":
                 self._launch_choraufstellung(context)
             else:
@@ -86,6 +94,22 @@ class TaskFlowController(QObject):
                 "Fehler",
                 f"Die Aufgabe konnte nicht abgeschlossen werden:\n{exc}",
             )
+
+    def _sync_context_to_ui(self, context) -> None:
+        """Mirror wizard-pinned entities into the UI state.
+
+        ``context.event`` becomes the active termin (info bar + events
+        tab + persisted id) — the wizard's own executors already do
+        this for picks made DURING the run, but defensive re-syncing
+        keeps the state consistent even for runs whose steps only
+        pinned the context without going through the executors.
+        """
+        window = self._window
+        event = getattr(context, "event", None)
+        if event is not None and getattr(window, "current_event", None) is not event:
+            from .dialogs._task_wizard import _sync_active_event
+
+            _sync_active_event(window.db, event, parent=window)
 
     # ------------------------------------------------------------------
     # helpers
