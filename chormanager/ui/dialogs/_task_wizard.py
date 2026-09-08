@@ -289,6 +289,50 @@ def _sync_active_project(db, project, parent) -> None:
     ProjectRepository(db).set_active(project.id)
 
 
+def _sync_active_event(db, event, parent) -> None:
+    """Make ``event`` the UI's active termin (all three sources).
+
+    2026-09 audit (wizard → UI sync gap): picking or creating a termin
+    inside the wizard previously only pinned ``context.event``. The
+    info bar kept showing the OLD termin and nothing was persisted.
+
+    This helper mirrors :func:`_sync_active_project` for events:
+
+    * persists ``set_last_active_event_id`` (survives a restart)
+    * updates ``MainWindow.current_event`` and the info bar when a
+      MainWindow is reachable
+    * selects the termin's row in the events tab so the user sees
+      the same termin everywhere.
+    """
+    from ...config import set_last_active_event_id
+
+    set_last_active_event_id(event.id)
+
+    main_window = parent.window() if parent is not None else None
+    if main_window is None:
+        return
+
+    main_window.current_event = event
+    if hasattr(main_window, "choraufstellung_tab"):
+        main_window.choraufstellung_tab.set_event(event)
+
+    # Update the info bar + events-tab selection.
+    if hasattr(main_window, "_update_info_labels"):
+        main_window._update_info_labels()
+    events_tab = getattr(main_window, "events_tab", None)
+    if events_tab is not None:
+        from PyQt6.QtCore import Qt as _Qt
+
+        # Reload first: the event may have just been created and the
+        # table may not know about it yet.
+        events_tab._load_events()
+        for row in range(events_tab.table.rowCount()):
+            item = events_tab.table.item(row, 0)
+            if item and item.data(_Qt.ItemDataRole.UserRole) == event.id:
+                events_tab.table.selectRow(row)
+                break
+
+
 class BesetzungPickDialog(QDialog):
     """Pick an existing besetzung or assemble a new one inline."""
 
@@ -422,7 +466,12 @@ def build_default_executors(
         dialog = EventPickDialog(db, context.project, parent=parent)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return dialog.get_event()
+        event = dialog.get_event()
+        if event is not None:
+            # 2026-09 audit: the picked termin becomes the UI's active
+            # termin (config + current_event + events tab + info bar).
+            _sync_active_event(db, event, parent)
+        return event
 
     def do_besetzung(context: TaskContext):
         dialog = BesetzungPickDialog(db, context.project, parent=parent)
@@ -535,7 +584,11 @@ def build_default_executors(
         }
         if not data.get("name"):
             return None
-        return EventRepository(db).create(**data)
+        event = EventRepository(db).create(**data)
+        # 2026-09 audit: a freshly created termin immediately becomes
+        # the active termin everywhere (config + UI).
+        _sync_active_event(db, event, parent)
+        return event
 
     return {
         "projekt_waehlen": do_project,
@@ -695,10 +748,21 @@ class _StepPage(QWizardPage):
         if self._executed:
             return
         target = _PIN_TARGETS.get(self.step.id)
+        entity = None
         if target is not None:
             entity = self._detected_entity()
             if entity is not None:
                 setattr(self._host.context, target, entity)
+                # 2026-09 audit: confirming a detected termin must
+                # also make it the UI's active termin — same contract
+                # as picking it explicitly.
+                if target == "event" and self.step.id in (
+                    "termin_waehlen",
+                    "termin_anlegen",
+                ):
+                    _sync_active_event(
+                        self._host.db, entity, parent=self._host
+                    )
         self._executed = True
         self.use_button.setVisible(False)
         self.action_button.setVisible(False)

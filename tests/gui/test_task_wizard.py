@@ -621,3 +621,121 @@ class TestPickDialogs:
         # Accept with nothing selected must be refused.
         dialog._on_accept()
         assert dialog.result() != dialog.DialogCode.Accepted
+
+
+class TestTerminSyncToUi:
+    """2026-09 audit: wizard termin steps must sync the UI state.
+
+    Pinned regressions (schreib-direction gaps):
+    * do_termin (pick) and do_termin_neu (create) only pinned
+      ``context.event`` — neither ``set_last_active_event_id`` nor
+      ``window.current_event`` nor the events-tab selection were
+      updated, so the info bar kept showing the OLD termin after the
+      wizard finished.
+    * _launch_choraufstellung set ``window.current_event`` at runtime
+      but never persisted it (set_last_active_event_id), so the
+      wizard's termin vanished again on the next start.
+    """
+
+    def _make_window(self, qtbot, tmp_path, monkeypatch=None):
+        from chormanager.ui.main_window import MainWindow
+
+        window = MainWindow(db_path=str(tmp_path / "sync.db"))
+        qtbot.addWidget(window)
+
+        # Isolate the persisted active-event id: never touch the real
+        # data/state.json from a test (2026-09 hygiene).
+        if monkeypatch is not None:
+            stored = {"value": None}
+            monkeypatch.setattr(
+                "chormanager.config.get_last_active_event_id",
+                lambda: stored["value"],
+            )
+            monkeypatch.setattr(
+                "chormanager.config.set_last_active_event_id",
+                lambda new_id: stored.__setitem__("value", new_id),
+            )
+            window._test_stored_event_id = stored
+        return window
+
+    def test_sync_active_event_sets_current_event(self, qtbot, tmp_path, monkeypatch):
+        from chormanager.domain.repository import (
+            EventRepository,
+            ProjectRepository,
+        )
+        from chormanager.ui.dialogs._task_wizard import _sync_active_event
+
+        window = self._make_window(qtbot, tmp_path, monkeypatch)
+        project = ProjectRepository(window.db).create(name="P")
+        event = EventRepository(window.db).create(
+            name="Konzert", date="2026-09-01",
+            event_type="konzert", project_id=project.id,
+        )
+
+        _sync_active_event(window.db, event, parent=window)
+
+        assert window.current_event is not None
+        assert window.current_event.id == event.id
+        window.close()
+
+    def test_sync_active_event_updates_events_tab_selection(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        from chormanager.domain.repository import (
+            EventRepository,
+            ProjectRepository,
+        )
+        from chormanager.ui.dialogs._task_wizard import _sync_active_event
+
+        window = self._make_window(qtbot, tmp_path, monkeypatch)
+        project = ProjectRepository(window.db).create(name="P")
+        event = EventRepository(window.db).create(
+            name="Konzert", date="2026-09-01",
+            event_type="konzert", project_id=project.id,
+        )
+
+        _sync_active_event(window.db, event, parent=window)
+
+        # Info bar shows the event
+        assert "Konzert" in window.event_info_label.text()
+
+        # Events tab selected the row
+        row = window.events_tab.table.currentRow()
+        assert row >= 0
+        item = window.events_tab.table.item(row, 0)
+        assert item is not None
+        assert item.data(0x0100) == event.id
+
+        # Persisted for the next start
+        assert window._test_stored_event_id["value"] == event.id
+        window.close()
+
+    def test_launch_choraufstellung_persists_event(self, qtbot, tmp_path, monkeypatch):
+        from chormanager.domain.repository import (
+            EventRepository,
+            ProjectRepository,
+        )
+        from chormanager.domain.taskflow import TaskContext
+
+        window = self._make_window(qtbot, tmp_path, monkeypatch)
+        project = ProjectRepository(window.db).create(name="P")
+        event = EventRepository(window.db).create(
+            name="Konzert", date="2026-09-01",
+            event_type="konzert", project_id=project.id,
+        )
+
+        launched = []
+        window._open_choraufstellung_for_event = lambda ev: launched.append(ev)
+
+        window.task_flow_controller._on_task_completed(
+            "aufstellung_planen",
+            TaskContext(db=window.db, event=event),
+        )
+        assert launched
+
+        from chormanager.config import get_last_active_event_id
+        assert get_last_active_event_id() == event.id, (
+            "_launch_choraufstellung must persist the wizard's termin "
+            "(set_last_active_event_id) so it survives a restart."
+        )
+        window.close()
