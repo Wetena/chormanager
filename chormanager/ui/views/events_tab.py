@@ -316,6 +316,12 @@ class EventsTab(QWidget):
 
         if reply == QMessageBox.StandardButton.Yes:
             self.event_repo.delete(event_id)
+            # Bug 2 (2026-09 Audit): Beim Löschen des zuletzt aktiven
+            # Termins die gespeicherte ID aufräumen, sonst verwaiset
+            # sie und das Restore beim nächsten Start verwirft sie
+            # still ("Aktiv-Parameter verschwinden").
+            if get_last_active_event_id() == event_id:
+                set_last_active_event_id(None)
             self._load_events()
 
     def _manage_availability(self):

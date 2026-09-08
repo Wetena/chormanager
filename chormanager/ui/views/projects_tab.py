@@ -366,8 +366,15 @@ class ProjectsTab(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             self.project_repo.delete(project.id)
 
+            # Bug 2/3 (2026-09 Audit): Beim Löschen des aktiven Projekts
+            # sowohl die gespeicherte ID als auch die In-Memory-Referenz
+            # aufräumen. Sonst verwaiset die state.json-ID und der
+            # Restore beim nächsten Start verwirft sie still
+            # ("Aktiv-Parameter verschwinden").
             if self.current_project and self.current_project.id == project.id:
                 self.current_project = None
+            if get_last_active_project_id() == project.id:
+                set_last_active_project_id(None)
 
             self._load_projects()
 
