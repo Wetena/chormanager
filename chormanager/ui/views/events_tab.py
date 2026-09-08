@@ -47,13 +47,28 @@ class EventsTab(QWidget):
         self._load_events()
 
     def _restore_active_event(self):
-        """Restore previously active event from config."""
-        last_active_id = get_last_active_event_id()
-        if last_active_id:
-            event = self.event_repo.get_by_id(last_active_id)
-            if event:
-                self.event_selected.emit(event)
+        """Restore previously active event from config.
 
+        Robustness (bug 1, 2026-09): the row-selection loop may only
+        run when an event was actually resolved. A missing stored id
+        (first launch) or a deleted event must simply skip the
+        restore instead of raising ``UnboundLocalError`` on a
+        populated table.
+        """
+        last_active_id = get_last_active_event_id()
+        if not last_active_id:
+            return
+        event = self.event_repo.get_by_id(last_active_id)
+        if event is None:
+            # Referenced event was deleted — drop the stale id so the
+            # info bar consistently shows "Keiner" instead of a
+            # restore that silently disappears on the next start.
+            from ...config import set_last_active_event_id
+
+            set_last_active_event_id(None)
+            return
+
+        self.event_selected.emit(event)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and item.data(Qt.ItemDataRole.UserRole) == event.id:
