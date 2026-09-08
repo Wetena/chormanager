@@ -114,6 +114,10 @@ def _termin_anlegen() -> TaskDefinition:
                 description=(
                     "Name, Datum und Typ des Termins eingeben – fertig."
                 ),
+                # 2026-09 audit: the created termin exists in the DB —
+                # the card can show ✓ once the project has any event
+                # (same predicate as the wizard's prerequisite step).
+                check=check_termin,
             ),
         ],
     )
@@ -154,6 +158,10 @@ def _verfuegbarkeit_erfassen() -> TaskDefinition:
                     "Setzen Sie pro Sänger den Status: Zusage, Absage, "
                     "unter Vorbehalt usw. Es wird automatisch gespeichert."
                 ),
+                # 2026-09 audit: after the wizard recorded replies the
+                # card can show ✓ — the same predicate as the earlier
+                # prerequisite proves at least one positive reply.
+                check=check_availability,
             ),
         ],
     )
