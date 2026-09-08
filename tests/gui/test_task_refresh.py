@@ -111,3 +111,45 @@ class TestRefreshAfterWizard:
             "After the aufstellung editor closes, the Aufgaben view "
             "must refresh so 'Aufstellung erstellen' can flip to ✓."
         )
+
+
+class TestNonAufstellungTasksSyncTermin:
+    """2026-09 audit: after termin_aufstellen/verfuegbarkeit wizards the
+    active termin (if the run pinned one) must be reflected in the UI.
+
+    The wizard now syncs the termin when it is picked/created
+    (_sync_active_event), but the completion handler previously never
+    propagated context.event for the NON-editor tasks either — the
+    info bar could still show an older termin until a manual refresh.
+    """
+
+    def test_task_completed_syncs_context_event(self, main_window):
+        from chormanager.domain.repository import (
+            EventRepository,
+            ProjectRepository,
+        )
+        from chormanager.domain.taskflow import TaskContext
+
+        window = main_window
+        project = ProjectRepository(window.db).create(name="P")
+        event = EventRepository(window.db).create(
+            name="Wizard-Termin", date="2026-09-05",
+            event_type="konzert", project_id=project.id,
+        )
+
+        # Vorher: kein aktiver Termin
+        assert window.current_event is None or (
+            window.current_event.id != event.id
+        )
+
+        window.task_flow_controller._on_task_completed(
+            "termin_anlegen",
+            TaskContext(db=window.db, event=event),
+        )
+
+        assert window.current_event is not None
+        assert window.current_event.id == event.id, (
+            "A wizard run that pinned a termin must make it the UI's "
+            "active termin (info bar) — not only the editor task."
+        )
+        assert "Wizard-Termin" in window.event_info_label.text()
