@@ -27,7 +27,7 @@ from ...domain.taskflow import (
     StepStatus,
     TaskContext,
     TaskDefinition,
-    evaluate_task,
+    evaluate_task_for_card,
     get_all_tasks,
 )
 
@@ -131,7 +131,7 @@ class TaskCard(QFrame):
         inside the wizard, so nothing is "erledigt" before the user
         actually ran the task.
         """
-        rows = evaluate_task(self.task, context)
+        rows = evaluate_task_for_card(self.task, context)
         prereq_total = 0
         prereq_present = 0
         marks = []
