@@ -116,12 +116,31 @@ class TaskFlowController(QObject):
                 "Die Choraufstellung ist nicht verfügbar.",
             )
             return
-        launcher(event)
+        try:
+            launcher(event)
+        finally:
+            # The launcher runs the editor as a blocking subprocess; by
+            # the time it returns the user may have saved a formation.
+            # Reload the formation table and re-evaluate the Aufgaben
+            # cards so "Aufstellung erstellen" flips to ✓ right away
+            # (regression 2026-09: stayed visually open).
+            choraufstellung_tab = getattr(window, "choraufstellung_tab", None)
+            if choraufstellung_tab is not None:
+                choraufstellung_tab._load_formations()
+            self._refresh_tabs()
 
     def _refresh_tabs(self) -> None:
-        """Reload every tab that could have been touched by the task."""
+        """Reload every tab that could have been touched by the task.
+
+        Includes the Aufgaben view: the cards re-evaluate their
+        prerequisites so completed steps flip to ✓ right away
+        (regression 2026-09: they stayed visually open).
+        """
         window = self._window
         window.projects_tab._load_projects()
         window.singers_tab._load_singers()
         window.events_tab._load_events()
         window.besetzung_tab._load_besetzungen()
+        tasks_view = getattr(window, "tasks_view", None)
+        if tasks_view is not None:
+            tasks_view.refresh()

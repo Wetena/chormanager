@@ -819,11 +819,13 @@ class MainWindow(
         self.statusBar().showMessage("Bereit")
 
     def _refresh_tabs(self):
-        """Refresh all tabs."""
+        """Refresh all tabs (incl. the Aufgaben view)."""
         if hasattr(self, "singers_tab"):
             self.singers_tab._load_singers()
         if hasattr(self, "events_tab"):
             self.events_tab._load_events()
+        if hasattr(self, "tasks_view"):
+            self.tasks_view.refresh()
 
     def _on_search_text_changed(self, text):
         """Handle search text change."""

@@ -14,6 +14,7 @@ from .checker import (
     check_besetzung,
     check_besetzung_for_event,
     check_event_pinned,
+    check_formation,
     check_project,
     check_termin,
 )
@@ -82,6 +83,7 @@ def _aufstellung_planen() -> TaskDefinition:
                     "Die Sänger mit Zusagen werden in den Sitzplan übernommen "
                     "– dort können Sie platzieren und drucken."
                 ),
+                check=check_formation,
             ),
         ],
     )

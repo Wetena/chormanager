@@ -9,6 +9,8 @@ are shared with the catalog so the UI layer can reuse them.
 """
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, List, Optional, Tuple
 
 from ..repository import (
@@ -21,6 +23,30 @@ from .models import StepStatus, TaskContext, TaskDefinition, TaskStep
 
 #: Statuses that count as "will attend" for planning purposes.
 _POSITIVE_STATUSES = ("yes", "conditional")
+
+
+def get_data_dir() -> str:
+    """Return the choraufstellung data directory (formation JSONs).
+
+    Mirrors :func:`chormanager.chor aufstellung.config.get_data_dir`
+    without importing the Qt-bound choraufstellung package: the
+    formation editor stores its JSON files next to its own module
+    (``chormanager/choraufstellung/data``). Imported lazily and
+    wrapped in try/except so a broken path never crashes evaluation.
+    """
+    try:
+        from ...choraufstellung.config import get_data_dir as _ca_get_data_dir
+
+        return _ca_get_data_dir()
+    except Exception:
+        # Fallback: derive the sibling package location directly.
+        try:
+            return os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "..", "choraufstellung", "data",
+            )
+        except Exception:
+            return ""
 
 
 # ----------------------------------------------------------------------
@@ -157,6 +183,63 @@ def check_availability(context: TaskContext) -> bool:
         return False
     availabilities = AvailabilityRepository(context.db).get_by_event(event.id)
     return any(a.status in _POSITIVE_STATUSES for a in availabilities)
+
+
+def check_formation(context: TaskContext) -> bool:
+    """True when a saved formation matches the resolved event.
+
+    A formation "belongs" to an event when its ``metadata`` block
+    carries the same ``event`` (name) AND ``event_date``. That is
+    exactly what the choraufstellung editor writes when it is
+    launched via the task wizard (``CHOR_EVENT_*`` env vars become
+    ``_loaded_metadata`` and are persisted on save).
+
+    Robustness contract (pinned by unit tests):
+    * missing data directory  -> False (never raises)
+    * corrupt JSON file       -> False (file is skipped)
+    * ``backups/`` sub-folder -> ignored (autosaves don't count)
+    * no event resolvable     -> False
+    """
+    event = resolve_event(context)
+    if event is None:
+        return False
+
+    event_name = (getattr(event, "name", None) or "").strip()
+    event_date = (getattr(event, "date", None) or "")[:10]
+    if not event_name or not event_date:
+        return False
+
+    data_dir = get_data_dir()
+    if not data_dir or not os.path.isdir(data_dir):
+        return False
+
+    try:
+        entries = os.listdir(data_dir)
+    except OSError:
+        return False
+
+    for filename in entries:
+        if not filename.endswith(".json"):
+            continue
+        filepath = os.path.join(data_dir, filename)
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            with open(filepath, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        metadata = data.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        if (
+            (metadata.get("event") or "").strip() == event_name
+            and (metadata.get("event_date") or "")[:10] == event_date
+        ):
+            return True
+    return False
 
 
 # ----------------------------------------------------------------------

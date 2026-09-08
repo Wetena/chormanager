@@ -263,8 +263,12 @@ class TestAufstellungPlanenChain:
         assert rows[0][1] is StepStatus.OPEN
 
     def test_final_step_stays_open_until_executed(self, db, task):
-        """The last step is an action performed by the wizard; it has
-        no DB-side completion condition."""
+        """Without a saved formation the final step stays open.
+
+        The step now carries ``check_formation``: it flips to DONE as
+        soon as a formation file matching the event exists (see
+        tests/unit/test_taskflow_formation_check.py). With an empty
+        data directory it remains open, exactly like before."""
         final_row = evaluate_task(task, TaskContext(db=db))[-1]
         assert final_row[0].id == "aufstellung_oeffnen"
         assert final_row[1] is StepStatus.OPEN

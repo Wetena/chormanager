@@ -39,13 +39,17 @@ class TestTasksView:
         assert titles[0] == expected_first
 
     def test_progress_label_reflects_empty_db(self, view):
-        """Fresh DB: nothing exists -> all 4 prerequisites missing.
+        """Fresh DB: nothing exists -> all 5 prerequisites missing.
         The label must speak of Vorbedingungen, never of completed
         steps (regression: '4 von 5 Schritten erledigt' right after
-        program start)."""
+        program start).
+
+        Note: since the 2026-09 formation-check fix, the final step
+        'Aufstellung erstellen' is a real prerequisite too (a saved
+        formation file) — hence 5, not 4."""
         card = view.cards[0]
         assert "Vorbedingungen" in card.progress_label.text()
-        assert "4 von 4" in card.progress_label.text()
+        assert "5 von 5" in card.progress_label.text()
         assert "erledigt" not in card.progress_label.text()
 
     def test_progress_label_all_prerequisites_met(self, view, db,
@@ -85,8 +89,64 @@ class TestTasksView:
 
         view.refresh()
 
-        # All 4 prerequisites exist in the DB -> ready to start; the
-        # final action (Aufstellung erstellen) is still the user's job.
+        # 4 of 5 prerequisites exist in the DB -> one open remains:
+        # the saved formation file (no formation JSON written here).
+        # Before the 2026-09 fix the final step had no check and the
+        # card wrongly claimed "Alle Vorbedingungen erfüllt".
+        label = view.cards[0].progress_label.text()
+        assert "Noch offen: 1 von 5" in label
+        assert "erledigt" not in label
+
+    def test_progress_label_all_met_incl_formation(
+        self, view, db, monkeypatch, tmp_path
+    ):
+        """With a matching formation file the card is fully ready."""
+        import json
+
+        import chormanager.config as config_module
+        from chormanager.domain.repository import (
+            AvailabilityRepository,
+            BesetzungRepository,
+            EventRepository,
+            ProjectRepository,
+            SingerRepository,
+        )
+
+        project_repo = ProjectRepository(db)
+        project = project_repo.create(name="Testprojekt")
+        project_repo.set_active(project.id)
+        monkeypatch.setattr(
+            config_module,
+            "get_last_active_project_id",
+            lambda: project.id,
+        )
+
+        event = EventRepository(db).create(
+            name="Konzert", date="2026-09-01",
+            event_type="konzert", project_id=project.id,
+        )
+        BesetzungRepository(db).create(
+            name="Besetzung", project_id=project.id, singer_ids=[]
+        )
+        singer = SingerRepository(db).create(
+            full_name="Anna Alt", voice_group="Alt 1"
+        )
+        AvailabilityRepository(db).update(singer.id, event.id, "yes")
+
+        data_dir = tmp_path / "formations"
+        data_dir.mkdir()
+        (data_dir / "choraufstellung-2026-09-01-version-x.json").write_text(
+            json.dumps({"metadata": {
+                "event": "Konzert", "event_date": "2026-09-01",
+            }}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "chormanager.domain.taskflow.checker.get_data_dir",
+            lambda: str(data_dir),
+        )
+
+        view.refresh()
         label = view.cards[0].progress_label.text()
         assert "Alle Vorbedingungen erf" in label
         assert "erledigt" not in label
