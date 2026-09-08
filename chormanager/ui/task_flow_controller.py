@@ -108,6 +108,13 @@ class TaskFlowController(QObject):
         if hasattr(window, "events_tab"):
             window.events_tab.event_selected.emit(event)
 
+        # 2026-09 audit: persist the wizard's termin as the active
+        # termin so it survives a restart (previously the id was only
+        # set when the user clicked a table row in the events tab).
+        from ..config import set_last_active_event_id
+
+        set_last_active_event_id(event.id)
+
         launcher = getattr(window, "_open_choraufstellung_for_event", None)
         if launcher is None:
             QMessageBox.warning(
