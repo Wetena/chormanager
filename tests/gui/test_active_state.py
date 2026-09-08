@@ -244,3 +244,125 @@ class TestDeleteClearsActiveIds:
             "project (bug 3)."
         )
         tab.deleteLater()
+
+
+class TestBesetzungInfoLabel:
+    """Bug 4: the besetzung label must be part of _update_info_labels.
+
+    Before the fix the label was ONLY written by the
+    ``active_besetzung_changed`` signal handler. After a restart or a
+    project switch ``_update_info_labels`` never refreshed it — a
+    besetzung of ANOTHER project kept being displayed (stale) or the
+    label stayed "Keine" although a valid besetzung was configured.
+    """
+
+    def test_update_info_labels_shows_saved_besetzung(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        from chormanager.ui.main_window import MainWindow
+
+        db_path = str(tmp_path / "label.db")
+        window = MainWindow(db_path=db_path)
+        qtbot.addWidget(window)
+
+        from chormanager.domain.repository import (
+            BesetzungRepository,
+            ProjectRepository,
+        )
+        project = ProjectRepository(window.db).create(name="Hoffmann")
+        besetzung = BesetzungRepository(window.db).create(
+            name="Konzertbesetzung", project_id=project.id, singer_ids=[]
+        )
+
+        monkeypatch.setattr(
+            "chormanager.config.get_last_active_besetzung_id",
+            lambda: besetzung.id,
+        )
+        try:
+            window._update_info_labels()
+            label_text = window.besetzung_info_label.text()
+            assert besetzung.name in label_text, (
+                "_update_info_labels must show the saved active "
+                "besetzung, not a stale 'Keine'."
+            )
+            assert window.besetzung_info_label.isVisible() or not window.besetzung_info_label.isHidden()
+        finally:
+            window.close()
+
+    def test_update_info_labels_shows_keine_without_besetzung(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        from chormanager.ui.main_window import MainWindow
+
+        monkeypatch.setattr(
+            "chormanager.config.get_last_active_besetzung_id",
+            lambda: None,
+        )
+        db_path = str(tmp_path / "label2.db")
+        window = MainWindow(db_path=db_path)
+        qtbot.addWidget(window)
+        try:
+            window._update_info_labels()
+            assert window.besetzung_info_label.text() == "Keine"
+        finally:
+            window.close()
+
+    def test_update_info_labels_handles_deleted_besetzung(
+        self, qtbot, tmp_path, seeded, monkeypatch
+    ):
+        """A saved id that no longer resolves shows 'Keine' (bug 2 face)."""
+        from chormanager.ui.main_window import MainWindow
+
+        monkeypatch.setattr(
+            "chormanager.config.get_last_active_besetzung_id",
+            lambda: "does-not-exist",
+        )
+        db_path = str(tmp_path / "label3.db")
+        window = MainWindow(db_path=db_path)
+        qtbot.addWidget(window)
+        try:
+            window._update_info_labels()
+            assert window.besetzung_info_label.text() == "Keine"
+        finally:
+            window.close()
+
+    def test_project_switch_invalidates_foreign_besetzung(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """Switching the project must not keep another project's besetzung.
+
+        Bug 4 (stale label): the besetzung label previously only
+        changed on the ``active_besetzung_changed`` signal. A project
+        switch left a besetzung of the PREVIOUS project displayed.
+        """
+        from chormanager.ui.main_window import MainWindow
+
+        db_path = str(tmp_path / "switch.db")
+        window = MainWindow(db_path=db_path)
+        qtbot.addWidget(window)
+
+        from chormanager.domain.repository import (
+            BesetzungRepository,
+            ProjectRepository,
+        )
+        repo = ProjectRepository(window.db)
+        project_a = repo.create(name="Projekt A")
+        project_b = repo.create(name="Projekt B")
+        besetzung_a = BesetzungRepository(window.db).create(
+            name="Besetzung A", project_id=project_a.id, singer_ids=[]
+        )
+
+        monkeypatch.setattr(
+            "chormanager.config.get_last_active_besetzung_id",
+            lambda: besetzung_a.id,
+        )
+
+        # User switches to project B.
+        window.projects_tab.set_current_project(project_b)
+
+        window._update_info_labels()
+        assert window.besetzung_info_label.text() == "Keine", (
+            "A besetzung of another project must not survive a "
+            "project switch in the info bar."
+        )
+        window.close()
