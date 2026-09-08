@@ -54,12 +54,22 @@ class TaskStep:
         check: Optional predicate ``check(context) -> bool`` evaluated
             against the current database state. ``None`` marks a pure
             action step that can only be completed by executing it.
+        card_check: Optional predicate used ONLY by the Aufgaben-card
+            display (global view). Falls back to ``check`` when unset.
+            Needed when a wizard step legitimately requires an explicit
+            user pick (e.g. ``check_event_pinned``) that would look
+            permanently open on the card.
     """
 
     id: str
     title: str
     description: str = ""
     check: Optional[Callable[[Any], bool]] = None
+    card_check: Optional[Callable[[Any], bool]] = None
+
+    def __post_init__(self) -> None:
+        if self.card_check is None:
+            self.card_check = self.check
 
     def is_done(self, context: Any) -> bool:
         """Return whether this step is satisfied for ``context``.
@@ -71,6 +81,20 @@ class TaskStep:
             return False
         try:
             return bool(self.check(context))
+        except Exception:
+            return False
+
+    def is_done_for_card(self, context: Any) -> bool:
+        """Return whether the Aufgaben CARD shows this step as done.
+
+        Uses ``card_check`` (falls back to ``check``). Wizard steps
+        that require an explicit pick keep their strict ``check``
+        while the card shows the global DB state instead.
+        """
+        if self.card_check is None:
+            return False
+        try:
+            return bool(self.card_check(context))
         except Exception:
             return False
 

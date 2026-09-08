@@ -264,6 +264,34 @@ def evaluate_task(
     ]
 
 
+def evaluate_task_for_card(
+    task: TaskDefinition, context: TaskContext
+) -> List[Tuple[TaskStep, StepStatus]]:
+    """Evaluate every step for the Aufgaben-CARD display.
+
+    Differs from :func:`evaluate_task` only in using
+    ``TaskStep.is_done_for_card`` (the ``card_check`` predicate): the
+    card shows the GLOBAL database state, while the wizard keeps its
+    explicit-pick semantics (e.g. ``check_event_pinned``).
+
+    Args:
+        task: The task definition to evaluate.
+        context: Current database context (usually nothing pinned).
+
+    Returns:
+        Ordered ``(step, status)`` tuples mirroring ``task.steps``.
+    """
+    return [
+        (
+            step,
+            StepStatus.DONE
+            if step.is_done_for_card(context)
+            else StepStatus.OPEN,
+        )
+        for step in task.steps
+    ]
+
+
 def next_open_step(
     task: TaskDefinition, context: TaskContext
 ) -> Optional[TaskStep]:

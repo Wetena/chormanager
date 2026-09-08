@@ -141,6 +141,11 @@ def _verfuegbarkeit_erfassen() -> TaskDefinition:
                     "erfasst werden sollen."
                 ),
                 check=check_event_pinned,
+                # 2026-09 audit: the wizard needs an explicit pick, but
+                # the CARD would show this step as permanently open
+                # (a pinned event never exists outside a wizard run).
+                # On the card any existing termin of the project counts.
+                card_check=check_termin,
             ),
             TaskStep(
                 id="besetzung_pruefen",
@@ -150,6 +155,9 @@ def _verfuegbarkeit_erfassen() -> TaskDefinition:
                     "alle aktiven Sänger angezeigt."
                 ),
                 check=check_besetzung_for_event,
+                # Card equivalent: does the (active) project have a
+                # besetzung at all — no pinned event on the card.
+                card_check=check_besetzung,
             ),
             TaskStep(
                 id="verfuegbarkeit_erfassen",
